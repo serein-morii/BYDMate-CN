@@ -25,11 +25,27 @@ object VehicleKindDetector {
     private const val FUEL_ABSENT = 255
     private val FUEL_RANGE = 0..100
 
+    /** Values of persist.sys.energytype; see [fromEnergyType]. */
+    const val ENERGY_TYPE_EV = "1"
+    const val ENERGY_TYPE_HYBRID = "2"
+
     fun classify(hev: Int?, ev: Int?, fuel: Int?): VehicleKind = when {
         hev == null || ev == null || fuel == null -> VehicleKind.UNKNOWN
         hev == MILEAGE_ABSENT && fuel == FUEL_ABSENT -> VehicleKind.EV
         hev != MILEAGE_ABSENT && fuel in FUEL_RANGE -> VehicleKind.HYBRID
         else -> VehicleKind.UNKNOWN
+    }
+
+    /**
+     * The car type the stock system property declares ("persist.sys.energytype": "1" = EV,
+     * "2" = hybrid, "0" = fuel-only, which this app does not support). Null leaves the decision
+     * to the counter rule: the property is missing on some firmware, and an unknown value must
+     * not outrank a working read.
+     */
+    fun fromEnergyType(value: String?): VehicleKind? = when (value?.trim()) {
+        ENERGY_TYPE_EV -> VehicleKind.EV
+        ENERGY_TYPE_HYBRID -> VehicleKind.HYBRID
+        else -> null
     }
 
     /**

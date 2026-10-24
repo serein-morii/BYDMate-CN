@@ -40,7 +40,7 @@ class CounterSnapshotWriterTest {
     @Test fun `on edge, periodic rows, and an off row stamped at the last running tick`() = runTest {
         val h = VehicleKind.HYBRID
         writer.onTick(tick(2, 1000.0, 302.4), h, 1_000_000L)                       // on
-        writer.onTick(tick(2, 1005.0, 302.8), h, 1_000_000L + 5 * 60_000L)          // nothing yet
+        writer.onTick(tick(2, 1005.0, 302.8), h, 1_000_000L + 2 * 60_000L)          // nothing yet
         writer.onTick(tick(2, 1010.0, 303.1), h, 1_000_000L + 10 * 60_000L)         // periodic
         writer.onTick(tick(0, 1012.0, 303.3), h, 1_000_000L + 11 * 60_000L)         // still moving
         val lastRun = 1_000_000L + 11 * 60_000L

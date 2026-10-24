@@ -3,7 +3,9 @@ package com.bydmate.app.data.nativestack
 import android.util.Log
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.vehicle.BatchReadItem
+import com.bydmate.app.data.vehicle.BatteryPreheatChannel
 import com.bydmate.app.data.vehicle.HelperClient
+import com.bydmate.app.split.readSystemProperty
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -65,6 +67,7 @@ class VehicleKindMonitor @Inject constructor(
     @Suppress("TooGenericExceptionCaught") // runs on serviceScope, which has no exception handler
     suspend fun probe(nowMs: Long) {
         try {
+            if (confirmFromProperty(nowMs)) return
             val reply = helperClient.readBatch(ITEMS)
             val hev = reply?.getOrNull(0)?.let { (s, v) -> VehicleKindDetector.word(s, v) }
             val ev = reply?.getOrNull(1)?.let { (s, v) -> VehicleKindDetector.word(s, v) }
@@ -95,6 +98,33 @@ class VehicleKindMonitor @Inject constructor(
                 if (attempts >= MAX_ATTEMPTS) roundDone = true
             }
         }
+    }
+
+    /** Test seam: the stock car-type property ("persist.sys.energytype"). */
+    internal var energyType: () -> String? = { readSystemProperty(BatteryPreheatChannel.ENERGY_TYPE_PROP) }
+
+    /**
+     * The system property settles the type in one read, before any autoservice traffic: it is
+     * what the car says it is, it works when the three fids answer nothing (the case on some
+     * head units), and a build property cannot change between probes — so no two-read
+     * confirmation is needed. Only a decisive value takes over; anything else falls through to
+     * the counter rule.
+     */
+    private suspend fun confirmFromProperty(nowMs: Long): Boolean {
+        val raw = energyType()
+        val confirmed = VehicleKindDetector.fromEnergyType(raw) ?: return false
+        lastEvidence = PROP_EVIDENCE_PREFIX + raw
+        settings.setStrings(
+            mapOf(
+                SettingsRepository.KEY_VEHICLE_KIND to confirmed.name,
+                SettingsRepository.KEY_VEHICLE_KIND_EVIDENCE to lastEvidence!!,
+                SettingsRepository.KEY_VEHICLE_KIND_CONFIRMED_AT to nowMs.toString(),
+            )
+        )
+        _kind.value = confirmed
+        synchronized(lock) { roundDone = true }
+        Log.i(TAG, "probe attempt=$attempts read=$confirmed from ${BatteryPreheatChannel.ENERGY_TYPE_PROP}=$raw confirmed=true")
+        return true
     }
 
     /** The diagnostic dump line ([VehicleKindDetector.dumpLine]). */
@@ -131,6 +161,8 @@ class VehicleKindMonitor @Inject constructor(
 
     companion object {
         private const val TAG = "VehicleKind"
+        /** Evidence string when the system property decided, e.g. "prop=2". */
+        const val PROP_EVIDENCE_PREFIX = "prop="
         const val MAX_ATTEMPTS = 10
         const val RECHECK_MS = 24 * 60 * 60 * 1000L
 

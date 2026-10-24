@@ -240,7 +240,7 @@ class BatteryPreheatChannel(
         /** The allowlist actions this channel carries out. */
         val ACTIONS = setOf(ACTION_ON, ACTION_OFF)
 
-        /** The car type as the stock settings app reads it; logged, never a gate. */
+        /** The car type as the stock settings app reads it; also the vehicle-kind fast path. */
         const val ENERGY_TYPE_PROP = "persist.sys.energytype"
 
         private const val TAG = "BatteryPreheatChannel"

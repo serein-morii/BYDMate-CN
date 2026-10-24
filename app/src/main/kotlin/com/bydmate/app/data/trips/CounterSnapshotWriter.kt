@@ -102,7 +102,9 @@ class CounterSnapshotWriter @Inject constructor(
 
     companion object {
         private const val TAG = "CounterSnapshot"
-        const val PERIODIC_MS = 10 * 60 * 1000L
+        // 3 min, not 10: HistoryImporter pairs a trip edge with a snapshot within ±90 s, and on a
+        // car that dies at ignition-off the periodic rows are often the only edges it can find.
+        const val PERIODIC_MS = 3 * 60 * 1000L
         const val RETENTION_MS = 90L * 24 * 60 * 60 * 1000
         const val COLD_START_WINDOW_MS = 90_000L
     }

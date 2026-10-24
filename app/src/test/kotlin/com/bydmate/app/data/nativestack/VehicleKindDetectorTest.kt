@@ -214,6 +214,45 @@ class VehicleKindDetectorTest {
         assertEquals(EV_POLL_BATCH_SIZE, items.captured.size)
     }
 
+    @Test fun `the energytype property confirms a hybrid without a batch read`() = runTest {
+        val store = Store()
+        val helper = mockk<HelperClient>()
+        val monitor = VehicleKindMonitor(store.settings, helper)
+        monitor.energyType = { "2" }
+
+        monitor.onServiceStart(0L)
+
+        assertEquals(VehicleKind.HYBRID, monitor.kind.value)
+        assertEquals("HYBRID", store.values[SettingsRepository.KEY_VEHICLE_KIND])
+        assertEquals("prop=2", store.values[SettingsRepository.KEY_VEHICLE_KIND_EVIDENCE])
+        coVerify(exactly = 0) { helper.readBatch(any()) }
+    }
+
+    @Test fun `the energytype property confirms an EV`() = runTest {
+        val store = Store()
+        val helper = mockk<HelperClient>()
+        val monitor = VehicleKindMonitor(store.settings, helper)
+        monitor.energyType = { "1" }
+
+        monitor.onServiceStart(0L)
+
+        assertEquals(VehicleKind.EV, monitor.kind.value)
+        coVerify(exactly = 0) { helper.readBatch(any()) }
+    }
+
+    @Test fun `an undecisive energytype leaves the decision to the counters`() = runTest {
+        val store = Store()
+        val monitor = VehicleKindMonitor(store.settings, helperAnswering(hybridReply, hybridReply))
+        monitor.energyType = { "0" }
+
+        monitor.onServiceStart(0L)
+        monitor.claimProbe(10_000L)
+        monitor.probe(10_000L)
+
+        assertEquals(VehicleKind.HYBRID, monitor.kind.value)
+        assertEquals("hev=3812;ev=9240;fuel=54", store.values[SettingsRepository.KEY_VEHICLE_KIND_EVIDENCE])
+    }
+
     private companion object {
         const val EV_POLL_BATCH_SIZE = 94
     }
