@@ -47,10 +47,18 @@ jobs:
       - name: Check the APK is actually signed
         run: |
           APK=$(ls app/build/outputs/apk/release/*.apk)
-          if "$ANDROID_SDK_ROOT/build-tools"/*/apksigner verify --print-certs "$APK" | grep -q "CN=BYDMate-CN"; then
-            "$ANDROID_SDK_ROOT/build-tools"/*/apksigner verify --print-certs "$APK" | head -2
+          # Runners carry several build-tools versions; a bare glob would hand apksigner
+          # several script paths as arguments. Pick the newest explicitly.
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          CERTS=$("$BT/apksigner" verify --print-certs "$APK" 2>&1)
+          echo "$CERTS" | sed -n '1,3p'
+          SO=$(unzip -l "$APK" | grep -c 'lib/arm64-v8a/.*\.so' || true)
+          BYTES=$(stat -c '%s' "$APK")
+          if echo "$CERTS" | grep -q 'CN=BYDMate-CN'; then
+            echo "release signature ok: bytes=$BYTES native_libs=$SO"
           else
-            echo "::error::$APK is not signed with the release key"; exit 1
+            echo "::error::$APK not signed with the release key (bytes=$BYTES native_libs=$SO first_cert=$(echo "$CERTS" | head -1))"
+            exit 1
           fi
 
       - name: Rename, checksum, notes
