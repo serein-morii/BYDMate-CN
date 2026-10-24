@@ -75,10 +75,25 @@ open class SettingsRepository @Inject constructor(
         /** Optional JSON object merged into every chat-completions body of the custom connection
          *  (e.g. {"thinking": false} to switch off reasoning). Blank = nothing extra. */
         const val KEY_CUSTOM_EXTRA_JSON = "custom_llm_extra_json"
-        /** "openrouter" | "zai" | "custom"; blank = openrouter (pre-wave-J default). */
+        /** "openrouter" | "zai" | "anthropic" | "custom"; blank = openrouter (pre-wave-J default). */
         const val KEY_AGENT_PRIMARY_CONN = "agent_primary_conn"
         /** Same values; blank = no fallback. */
         const val KEY_AGENT_FALLBACK_CONN = "agent_fallback_conn"
+        // Anthropic (Claude) connection slot: native Messages API, base URL is overridable
+        // (proxies/relays keep the same wire format).
+        const val KEY_ANTHROPIC_API_KEY = "anthropic_api_key"
+        const val KEY_ANTHROPIC_MODEL = "anthropic_model"
+        const val KEY_ANTHROPIC_BASE_URL = "anthropic_base_url"
+        /** Zhipu (open.bigmodel.cn) web search BYOK for the web_search tool; blank = unused. */
+        const val KEY_ZHIPU_SEARCH_API_KEY = "zhipu_search_api_key"
+        /** "openrouter" | "exa" | "zai" | "zhipu"; the chosen provider is tried first. */
+        const val KEY_WEB_SEARCH_PROVIDER = "web_search_provider"
+        const val PROVIDER_OPENROUTER = "openrouter"
+        const val PROVIDER_EXA = "exa"
+        const val PROVIDER_ZAI = "zai"
+        const val PROVIDER_ZHIPU = "zhipu"
+        /** QWeather BYOK for get_weather; blank = Open-Meteo (keyless). */
+        const val KEY_QWEATHER_API_KEY = "qweather_api_key"
         const val KEY_ALICE_ENDPOINT = "alice_endpoint"
         const val KEY_ALICE_API_KEY = "alice_api_key"
         const val KEY_ALICE_ENABLED = "alice_enabled"

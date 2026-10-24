@@ -149,6 +149,7 @@ import com.bydmate.app.R
 import com.bydmate.app.agent.LlmAgentBackend
 import com.bydmate.app.data.remote.OpenRouterModel
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.service.UpdateChecker
 import com.bydmate.app.ui.components.AdbVerdictDialog
 import com.bydmate.app.ui.components.AppLaunchPickerDialog
 import com.bydmate.app.ui.components.adbVerdictColor
@@ -682,6 +683,52 @@ private fun IntegrationsSection(state: SettingsUiState, viewModel: SettingsViewM
     }
 
     ConnectionCard(
+        title = "Claude",
+        configured = state.anthropicConfigured,
+        testResult = state.connTestResults["anthropic"],
+        testRunning = state.connTestRunning == "anthropic",
+        onTest = { viewModel.testConnection("anthropic") },
+    ) {
+        var anthropicHint by remember { mutableStateOf<Int?>(null) }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState())
+        ) {
+            ANTHROPIC_PRESETS.forEach { preset ->
+                UnitChip(
+                    label = preset.name,
+                    selected = state.anthropicBaseUrl == preset.baseUrl,
+                    onClick = {
+                        viewModel.saveAnthropicBaseUrl(preset.baseUrl)
+                        viewModel.saveAnthropicModel(preset.model)
+                        anthropicHint = preset.hintRes
+                    }
+                )
+            }
+        }
+        SettingHint(stringResource(anthropicHint ?: R.string.settings_anthropic_hint))
+        SettingsTextField(
+            label = stringResource(R.string.settings_conn_api_key_label),
+            value = state.anthropicApiKey,
+            onValueChange = { viewModel.saveAnthropicApiKey(it) },
+            keyboardType = KeyboardType.Password,
+            secret = true
+        )
+        SettingsTextField(
+            label = stringResource(R.string.settings_conn_base_url_label),
+            value = state.anthropicBaseUrl,
+            onValueChange = { viewModel.saveAnthropicBaseUrl(it) },
+            keyboardType = KeyboardType.Uri
+        )
+        SettingsTextField(
+            label = stringResource(R.string.settings_conn_model_label),
+            value = state.anthropicModel,
+            onValueChange = { viewModel.saveAnthropicModel(it) },
+            keyboardType = KeyboardType.Text
+        )
+    }
+
+    ConnectionCard(
         title = stringResource(R.string.settings_conn_custom_title),
         configured = state.customConfigured,
         testResult = state.connTestResults["custom"],
@@ -774,7 +821,54 @@ private fun IntegrationsSection(state: SettingsUiState, viewModel: SettingsViewM
     ModelSelectionCard(state, viewModel)
     SearchStatusCard(state)
 
-    SectionHeader(text = stringResource(R.string.settings_exa_section_header))
+    SectionHeader(text = stringResource(R.string.settings_search_section_header))
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Which provider the agent's web_search chain tries first; the rest follow as fallbacks.
+            val providerIds = listOf(
+                SettingsRepository.PROVIDER_OPENROUTER, SettingsRepository.PROVIDER_EXA,
+                SettingsRepository.PROVIDER_ZAI, SettingsRepository.PROVIDER_ZHIPU,
+            )
+            val providerLabels = listOf(
+                stringResource(R.string.settings_search_provider_openrouter),
+                stringResource(R.string.settings_search_provider_exa),
+                stringResource(R.string.settings_search_provider_zai),
+                stringResource(R.string.settings_search_provider_zhipu),
+            )
+            SettingChipRow(
+                title = stringResource(R.string.settings_search_provider_label),
+                description = stringResource(R.string.settings_search_provider_hint),
+                options = providerLabels,
+                selectedIndex = providerIds.indexOf(state.webSearchProvider).coerceAtLeast(0),
+                onSelect = { idx -> viewModel.selectWebSearchProvider(providerIds[idx]) },
+            )
+            SettingsTextField(
+                label = stringResource(R.string.agent_exa_api_key_label),
+                value = state.exaApiKey,
+                onValueChange = { viewModel.saveExaApiKey(it) },
+                keyboardType = KeyboardType.Password,
+                secret = true
+            )
+            SettingsTextField(
+                label = stringResource(R.string.settings_zhipu_api_key_label),
+                value = state.zhipuSearchApiKey,
+                onValueChange = { viewModel.saveZhipuSearchApiKey(it) },
+                keyboardType = KeyboardType.Password,
+                secret = true
+            )
+            SettingHint(stringResource(R.string.settings_zhipu_search_hint))
+        }
+    }
+
+    // Weather provider: with a QWeather key both geocoding and forecast switch to QWeather
+    // (Chinese city names); without one the keyless Open-Meteo stays.
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurfaceElevated),
@@ -785,13 +879,13 @@ private fun IntegrationsSection(state: SettingsUiState, viewModel: SettingsViewM
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SettingsTextField(
-                label = stringResource(R.string.agent_exa_api_key_label),
-                value = state.exaApiKey,
-                onValueChange = { viewModel.saveExaApiKey(it) },
+                label = stringResource(R.string.settings_qweather_api_key_label),
+                value = state.qweatherApiKey,
+                onValueChange = { viewModel.saveQweatherApiKey(it) },
                 keyboardType = KeyboardType.Password,
                 secret = true
             )
-            SettingHint(stringResource(R.string.settings_exa_search_hint))
+            SettingHint(stringResource(R.string.settings_qweather_hint))
         }
     }
 
@@ -3414,6 +3508,24 @@ private fun AppSection(state: SettingsUiState, viewModel: SettingsViewModel) {
                 checked = state.autoCheckUpdates,
                 onCheckedChange = { viewModel.setAutoCheckUpdates(it) },
             )
+            // Release channels, DiPlay-style: the choice is tried first, the rest as fallbacks.
+            val channelIds = listOf(
+                UpdateChecker.CHANNEL_GITHUB, UpdateChecker.CHANNEL_GITEE,
+                UpdateChecker.CHANNEL_GHPROXY, UpdateChecker.CHANNEL_GHPROXY2,
+            )
+            val channelLabels = listOf(
+                stringResource(R.string.settings_update_channel_github),
+                stringResource(R.string.settings_update_channel_gitee),
+                stringResource(R.string.settings_update_channel_ghproxy),
+                stringResource(R.string.settings_update_channel_ghproxy2),
+            )
+            SettingChipRow(
+                title = stringResource(R.string.settings_update_channel_label),
+                options = channelLabels,
+                selectedIndex = channelIds.indexOf(state.updateChannel).coerceAtLeast(0),
+                onSelect = { idx -> viewModel.selectUpdateChannel(channelIds[idx]) },
+            )
+            SettingHint(stringResource(R.string.settings_update_channel_hint))
             SettingActionRow(
                 title = stringResource(R.string.settings_update_check_button),
                 description = "BYDMate v${state.appVersion}",
@@ -4260,18 +4372,26 @@ private fun FontScaleBlock(
     }
 }
 
-/** Preset for the custom connection card: fills URL and model, key stays the user's. */
+/** Preset for a connection card: fills URL and model, key stays the user's. */
 private data class CustomPreset(val name: String, val baseUrl: String, val model: String, val hintRes: Int)
 
+// CN-first order: the presets a driver in China actually reaches for come first.
 private val CUSTOM_PRESETS = listOf(
+    CustomPreset("GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4.7-flash", R.string.settings_preset_hint_glm),
+    CustomPreset("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", R.string.settings_preset_hint_deepseek),
+    CustomPreset("Kimi", "https://api.moonshot.ai/v1", "", R.string.settings_preset_hint_kimi),
+    CustomPreset("Qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", R.string.settings_preset_hint_qwen),
     CustomPreset("Cloudflare", "https://api.cloudflare.com/client/v4/accounts/ACCOUNT_ID/ai/v1",
         "@cf/zai-org/glm-4.7-flash", R.string.settings_preset_hint_cloudflare),
     CustomPreset("Vercel", "https://ai-gateway.vercel.sh/v1",
         "openai/gpt-oss-120b", R.string.settings_preset_hint_vercel),
-    CustomPreset("Kimi", "https://api.moonshot.ai/v1", "", R.string.settings_preset_hint_kimi),
     CustomPreset("NanoGPT", "https://nano-gpt.com/api/subscription/v1", "", R.string.settings_preset_hint_nanogpt),
-    CustomPreset("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", R.string.settings_preset_hint_deepseek),
     CustomPreset("Mistral", "https://api.mistral.ai/v1", "", R.string.settings_preset_hint_mistral),
+)
+
+/** Presets for the Claude card (native Anthropic Messages API; relays keep the same wire). */
+private val ANTHROPIC_PRESETS = listOf(
+    CustomPreset("Anthropic", "https://api.anthropic.com", "claude-sonnet-4-5", R.string.settings_preset_hint_claude),
 )
 
 @Composable
@@ -4334,6 +4454,7 @@ private fun ModelSelectionCard(state: SettingsUiState, viewModel: SettingsViewMo
     val options = buildList {
         if (state.openRouterConfigured) add("openrouter" to "OpenRouter · ${state.openRouterModelName.ifBlank { state.openRouterModel }}")
         if (state.zaiConfigured) add("zai" to "z.ai · glm-4.7-flash")
+        if (state.anthropicConfigured) add("anthropic" to "Claude · ${state.anthropicModel}")
         if (state.customConfigured) add("custom" to "${state.customName.ifBlank { customTitle }} · ${state.customModel}")
     }
     Card(

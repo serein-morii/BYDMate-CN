@@ -179,6 +179,11 @@ data class SettingsUiState(
     val openRouterModel: String = "",
     /** Exa (api.exa.ai) BYOK for the web_search tool. Empty = openrouter:web_search fallback. */
     val exaApiKey: String = "",
+    /** Zhipu (open.bigmodel.cn) web search BYOK; QWeather BYOK for get_weather. */
+    val zhipuSearchApiKey: String = "",
+    val qweatherApiKey: String = "",
+    /** "openrouter" | "exa" | "zai" | "zhipu": the provider the search chain tries first. */
+    val webSearchProvider: String = SettingsRepository.PROVIDER_OPENROUTER,
     val openRouterModelName: String = "",
     val showModelPicker: Boolean = false,
     val availableModels: List<OpenRouterModel> = emptyList(),
@@ -198,6 +203,8 @@ data class SettingsUiState(
     val aliceEnabled: Boolean = false,
     val aliceSaveStatus: String? = null,
     val autoCheckUpdates: Boolean = true,
+    /** Release channel tried first (UpdateChannels.*). */
+    val updateChannel: String = UpdateChecker.DEFAULT_UPDATE_CHANNEL,
     val abrpTelemetryEnabled: Boolean = false,
     val abrpApiKey: String = "",
     val abrpUserToken: String = "",
@@ -306,8 +313,11 @@ data class SettingsUiState(
     val routeNavigator: String = com.bydmate.app.data.automation.RouteNavigatorUris.YANDEX,
     /** Long-term facts the agent remembered about the driver (DriverMemory). */
     val agentMemoryFacts: List<String> = emptyList(),
-    // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
+    // Wave J: multi-provider LLM connections (OpenRouter / z.ai / Claude / custom)
     val zaiApiKey: String = "",
+    val anthropicApiKey: String = "",
+    val anthropicModel: String = "",
+    val anthropicBaseUrl: String = "",
     val customName: String = "",
     val customBaseUrl: String = "",
     val customApiKey: String = "",
@@ -327,10 +337,12 @@ data class SettingsUiState(
 ) {
     val openRouterConfigured: Boolean get() = openRouterApiKey.isNotBlank() && openRouterModel.isNotBlank()
     val zaiConfigured: Boolean get() = zaiApiKey.isNotBlank()
+    val anthropicConfigured: Boolean get() = anthropicApiKey.isNotBlank() && anthropicModel.isNotBlank()
     val customConfigured: Boolean get() =
         customBaseUrl.isNotBlank() && customApiKey.isNotBlank() && customModel.isNotBlank()
     val agentConnConfigured: Boolean get() = when (primaryConn.ifBlank { "openrouter" }) {
         "zai" -> zaiConfigured
+        "anthropic" -> anthropicConfigured
         "custom" -> customConfigured
         else -> openRouterConfigured
     }
@@ -367,6 +379,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     private val agentOrchestrator: AgentOrchestrator,
     private val llmConnectionResolver: LlmConnectionResolver,
     private val openRouterClient: OpenRouterClient,
+    // A default keeps the old test constructors compiling; production always injects the singleton.
+    private val anthropicClient: com.bydmate.app.data.remote.AnthropicClient =
+        com.bydmate.app.data.remote.AnthropicClient(okhttp3.OkHttpClient()),
     private val placeRepository: PlaceRepository,
     private val energyDataDeadDetector: com.bydmate.app.data.local.EnergyDataDeadDetector,
     private val hudController: com.bydmate.app.hud.HudController,
@@ -454,7 +469,8 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
     private val _uiState = MutableStateFlow(SettingsUiState(
         appVersion = getVersion(),
-        autoCheckUpdates = UpdateChecker.isAutoCheckEnabled(appContext)
+        autoCheckUpdates = UpdateChecker.isAutoCheckEnabled(appContext),
+        updateChannel = UpdateChecker.getUpdateChannel(appContext),
     ))
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
@@ -555,6 +571,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             val apiKey = settingsRepository.getString(SettingsRepository.KEY_OPENROUTER_API_KEY, "")
             val modelId = settingsRepository.getString(SettingsRepository.KEY_OPENROUTER_MODEL, "")
             val exaApiKey = settingsRepository.getString(SettingsRepository.KEY_EXA_API_KEY, "")
+            val zhipuSearchApiKey = settingsRepository.getString(SettingsRepository.KEY_ZHIPU_SEARCH_API_KEY, "")
+            val qweatherApiKey = settingsRepository.getString(SettingsRepository.KEY_QWEATHER_API_KEY, "")
+            val webSearchProvider = settingsRepository.getString(
+                SettingsRepository.KEY_WEB_SEARCH_PROVIDER, SettingsRepository.PROVIDER_OPENROUTER)
 
             // Smart Home settings
             val aliceEndpoint = settingsRepository.getString(SettingsRepository.KEY_ALICE_ENDPOINT, "")
@@ -640,6 +660,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
             // Wave J: multi-provider LLM connections
             val zaiApiKey = settingsRepository.getString(SettingsRepository.KEY_ZAI_API_KEY, "")
+            val anthropicApiKey = settingsRepository.getString(SettingsRepository.KEY_ANTHROPIC_API_KEY, "")
+            val anthropicModel = settingsRepository.getString(SettingsRepository.KEY_ANTHROPIC_MODEL, "")
+            val anthropicBaseUrl = settingsRepository.getString(SettingsRepository.KEY_ANTHROPIC_BASE_URL, "")
             val customName = settingsRepository.getString(SettingsRepository.KEY_CUSTOM_NAME, "")
             val customBaseUrl = settingsRepository.getString(SettingsRepository.KEY_CUSTOM_BASE_URL, "")
             val customApiKey = settingsRepository.getString(SettingsRepository.KEY_CUSTOM_API_KEY, "")
@@ -667,6 +690,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     openRouterApiKey = apiKey,
                     openRouterModel = modelId,
                     exaApiKey = exaApiKey,
+                    zhipuSearchApiKey = zhipuSearchApiKey,
+                    qweatherApiKey = qweatherApiKey,
+                    webSearchProvider = webSearchProvider,
                     openRouterModelName = modelId.substringAfterLast("/").substringBefore(":"),
                     aliceEndpoint = aliceEndpoint,
                     aliceApiKey = aliceApiKey,
@@ -709,6 +735,9 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     routeNavigator = routeNavigator,
                     agentMemoryFacts = driverMemory.facts(),
                     zaiApiKey = zaiApiKey,
+                    anthropicApiKey = anthropicApiKey,
+                    anthropicModel = anthropicModel,
+                    anthropicBaseUrl = anthropicBaseUrl,
                     customName = customName,
                     customBaseUrl = customBaseUrl,
                     customApiKey = customApiKey,
@@ -1036,6 +1065,11 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     // Wave J: multi-provider LLM connections (OpenRouter / z.ai / custom)
 
     fun saveZaiApiKey(value: String) = saveConnField(value, SettingsRepository.KEY_ZAI_API_KEY) { s, v -> s.copy(zaiApiKey = v) }
+    fun saveAnthropicApiKey(value: String) = saveConnField(value, SettingsRepository.KEY_ANTHROPIC_API_KEY) { s, v -> s.copy(anthropicApiKey = v) }
+    fun saveAnthropicModel(value: String) = saveConnField(value, SettingsRepository.KEY_ANTHROPIC_MODEL) { s, v -> s.copy(anthropicModel = v) }
+    fun saveAnthropicBaseUrl(value: String) = saveConnField(value, SettingsRepository.KEY_ANTHROPIC_BASE_URL) { s, v -> s.copy(anthropicBaseUrl = v) }
+    fun saveZhipuSearchApiKey(value: String) = saveConnField(value, SettingsRepository.KEY_ZHIPU_SEARCH_API_KEY) { s, v -> s.copy(zhipuSearchApiKey = v) }
+    fun saveQweatherApiKey(value: String) = saveConnField(value, SettingsRepository.KEY_QWEATHER_API_KEY) { s, v -> s.copy(qweatherApiKey = v) }
     fun saveCustomName(value: String) = saveConnField(value, SettingsRepository.KEY_CUSTOM_NAME) { s, v -> s.copy(customName = v) }
     fun saveCustomBaseUrl(value: String) = saveConnField(value, SettingsRepository.KEY_CUSTOM_BASE_URL) { s, v -> s.copy(customBaseUrl = v, customModelList = emptyList(), customModelsError = null) }
     fun saveCustomApiKey(value: String) = saveConnField(value, SettingsRepository.KEY_CUSTOM_API_KEY) { s, v -> s.copy(customApiKey = v) }
@@ -1067,6 +1101,18 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         viewModelScope.launch { settingsRepository.setString(SettingsRepository.KEY_AGENT_FALLBACK_CONN, id) }
     }
 
+    /** Which search provider the agent's web_search chain tries first. */
+    fun selectWebSearchProvider(id: String) {
+        _uiState.update { it.copy(webSearchProvider = id) }
+        viewModelScope.launch { settingsRepository.setString(SettingsRepository.KEY_WEB_SEARCH_PROVIDER, id) }
+    }
+
+    /** Which release channel the update check tries first. */
+    fun selectUpdateChannel(channel: String) {
+        UpdateChecker.setUpdateChannel(appContext, channel)
+        _uiState.update { it.copy(updateChannel = channel) }
+    }
+
     /**
      * Round-trips a canned prompt through the given connection to verify it actually works
      * (not just that the fields are filled in). One in-flight guard per screen: a tap while
@@ -1084,7 +1130,12 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                 val messages = JSONArray().put(
                     JSONObject().put("role", "user").put("content", "Ответь одним словом: готов")
                 )
-                val result = openRouterClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, messages, null)
+                // Claude speaks the Messages API dialect: the same call goes through the adapter.
+                val result = if (conn.id == LlmConnectionResolver.ID_ANTHROPIC) {
+                    anthropicClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, messages, null)
+                } else {
+                    openRouterClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, messages, null)
+                }
                 val elapsedSec = (SystemClock.elapsedRealtime() - start) / 1000.0
                 result.fold(
                     onSuccess = { appStrings.get(R.string.settings_conn_check_ok, elapsedSec) },

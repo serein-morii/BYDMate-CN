@@ -250,6 +250,17 @@
     <string name="settings_openrouter_model_pick">Выбрать модель</string>
     <string name="settings_exa_section_header">Exa</string>
     <string name="settings_exa_search_hint">Для поиска в интернете голосовым агентом. Без ключа поиск идёт через OpenRouter</string>
+    <string name="settings_search_section_header">Поиск и погода</string>
+    <string name="settings_search_provider_label">Приоритетный поиск</string>
+    <string name="settings_search_provider_hint" formatted="false">Кого агент пробует первым; остальные источники — резервные</string>
+    <string name="settings_search_provider_openrouter">OpenRouter</string>
+    <string name="settings_search_provider_exa">Exa</string>
+    <string name="settings_search_provider_zai">z.ai</string>
+    <string name="settings_search_provider_zhipu">Zhipu</string>
+    <string name="settings_zhipu_api_key_label">Zhipu API Key (веб-поиск)</string>
+    <string name="settings_zhipu_search_hint">Ключ bigmodel.cn: поиск из Китая быстрее и без блокировок. Без ключа работают Exa и поиск подключения</string>
+    <string name="settings_qweather_api_key_label">QWeather API Key (погода)</string>
+    <string name="settings_qweather_hint">С ключом погода берётся с QWeather (точнее по Китаю). Без ключа — Open-Meteo</string>
 
     <!-- Settings: Model picker dialog -->
     <string name="settings_model_picker_title">Выбор модели</string>
@@ -315,6 +326,12 @@
     <string name="settings_autostart_open_button">Настройка автозапуска</string>
     <string name="settings_update_check_toggle_label">Проверять обновления</string>
     <string name="settings_update_check_toggle_description">Через 30 секунд после запуска проверять GitHub и предлагать обновиться</string>
+    <string name="settings_update_channel_label">Источник обновлений</string>
+    <string name="settings_update_channel_github">GitHub</string>
+    <string name="settings_update_channel_gitee">Gitee</string>
+    <string name="settings_update_channel_ghproxy">gh-proxy.com</string>
+    <string name="settings_update_channel_ghproxy2">ghproxy.net</string>
+    <string name="settings_update_channel_hint" formatted="false">Выбранный источник проверяется первым, остальные — резервные. Зеркала ускоряют скачивание APK в Китае; если GitHub API недоступен, проверка идёт через Gitee.</string>
     <string name="settings_update_check_button">Проверить обновления сейчас</string>
 
     <!-- Settings: Autoservice status -->
@@ -1537,6 +1554,7 @@
     <string name="settings_conn_check">Проверить</string>
     <string name="settings_conn_checking">Проверяю…</string>
     <string name="settings_zai_hint">Бесплатный вариант, отвечает медленнее. Подходит как запасной.</string>
+    <string name="settings_anthropic_hint" formatted="false">Нативный API Claude (Messages). Базовый адрес по умолчанию https://api.anthropic.com</string>
     <string name="settings_custom_hint">Любой OpenAI-совместимый API. Пресет подставляет адрес и модель, ключ свой.</string>
     <string name="settings_custom_extra_json_label">Доп. параметры запроса (JSON)</string>
     <string name="settings_custom_extra_json_hint">Подмешиваются в каждый запрос к этому серверу, например {\"thinking\": false} чтобы выключить рассуждения</string>
@@ -1550,6 +1568,9 @@
     <string name="settings_preset_hint_kimi">1000 запросов в день бесплатно.</string>
     <string name="settings_preset_hint_nanogpt">Подписка 8$ в месяц, оплата криптой.</string>
     <string name="settings_preset_hint_deepseek" formatted="false">Оплата по факту, скидка 50% ночью по Москве.</string>
+    <string name="settings_preset_hint_glm">Модель glm-4.7-flash бесплатна, остальные — по токенам.</string>
+    <string name="settings_preset_hint_qwen" formatted="false">Модель qwen-plus, оплата за токены.</string>
+    <string name="settings_preset_hint_claude" formatted="false">Официальный API Anthropic, оплата за токены.</string>
     <string name="settings_preset_hint_mistral">Бесплатно с верификацией телефона.</string>
     <string name="settings_models_header">Выбор моделей</string>
     <string name="settings_model_primary">Основная модель</string>

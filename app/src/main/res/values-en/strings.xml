@@ -240,6 +240,17 @@
     <string name="settings_openrouter_model_pick">Choose model</string>
     <string name="settings_exa_section_header">Exa</string>
     <string name="settings_exa_search_hint">For internet search by the voice agent. Without a key, search goes through OpenRouter</string>
+    <string name="settings_search_section_header">Search &amp; weather</string>
+    <string name="settings_search_provider_label">Preferred search</string>
+    <string name="settings_search_provider_hint" formatted="false">The provider the agent tries first; the others are fallbacks</string>
+    <string name="settings_search_provider_openrouter">OpenRouter</string>
+    <string name="settings_search_provider_exa">Exa</string>
+    <string name="settings_search_provider_zai">z.ai</string>
+    <string name="settings_search_provider_zhipu">Zhipu</string>
+    <string name="settings_zhipu_api_key_label">Zhipu API Key (web search)</string>
+    <string name="settings_zhipu_search_hint">bigmodel.cn key: searching from China is faster and unblocked. Without it, Exa and the search of the current connection apply</string>
+    <string name="settings_qweather_api_key_label">QWeather API Key (weather)</string>
+    <string name="settings_qweather_hint">With a key the weather comes from QWeather (better for China). Without one — Open-Meteo</string>
     <string name="settings_model_picker_title">Choose model</string>
     <string name="settings_model_picker_search_label">Search</string>
     <string name="settings_model_picker_loading">Loading models...</string>
@@ -297,6 +308,12 @@
     <string name="settings_autostart_open_button">Autostart setting</string>
     <string name="settings_update_check_toggle_label">Check for updates</string>
     <string name="settings_update_check_toggle_description">Check GitHub 30 seconds after startup and suggest updating</string>
+    <string name="settings_update_channel_label">Update source</string>
+    <string name="settings_update_channel_github">GitHub</string>
+    <string name="settings_update_channel_gitee">Gitee</string>
+    <string name="settings_update_channel_ghproxy">gh-proxy.com</string>
+    <string name="settings_update_channel_ghproxy2">ghproxy.net</string>
+    <string name="settings_update_channel_hint" formatted="false">The chosen source is checked first, the others are fallbacks. The mirrors speed up APK downloads in China; if the GitHub API is unreachable, the check goes through Gitee.</string>
     <string name="settings_update_check_button">Check for updates now</string>
     <string name="settings_autoservice_disconnected_title">not connected</string>
     <string name="settings_autoservice_disconnected_detail">restart the app if ADB is already on</string>
@@ -1381,6 +1398,7 @@
     <string name="settings_conn_check">Check</string>
     <string name="settings_conn_checking">Checking…</string>
     <string name="settings_zai_hint">Free option, replies more slowly. Good as a backup.</string>
+    <string name="settings_anthropic_hint" formatted="false">Native Claude API (Messages). Base URL defaults to https://api.anthropic.com</string>
     <string name="settings_custom_hint">Any OpenAI-compatible API. A preset fills in the URL and model, bring your own key.</string>
     <string name="settings_custom_extra_json_label">Extra request parameters (JSON)</string>
     <string name="settings_custom_extra_json_hint">Merged into every request to this server, for example {\"thinking\": false} to switch reasoning off</string>
@@ -1393,6 +1411,9 @@
     <string name="settings_preset_hint_kimi">1000 free requests per day.</string>
     <string name="settings_preset_hint_nanogpt">8$ monthly subscription, paid in crypto.</string>
     <string name="settings_preset_hint_deepseek" formatted="false">Pay as you go, 50% off at night (Moscow time).</string>
+    <string name="settings_preset_hint_glm">The glm-4.7-flash model is free, the rest are billed per token.</string>
+    <string name="settings_preset_hint_qwen" formatted="false">The qwen-plus model, billed per token.</string>
+    <string name="settings_preset_hint_claude" formatted="false">Official Anthropic API, billed per token.</string>
     <string name="settings_preset_hint_mistral">Free with phone verification.</string>
     <string name="settings_models_header">Model selection</string>
     <string name="settings_model_primary">Primary model</string>

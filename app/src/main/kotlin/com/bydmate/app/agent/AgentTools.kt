@@ -131,6 +131,16 @@ class AgentTools @Inject constructor(
         splitMgr = mgr
     }
 
+    // Zhipu web search uses the same method-injection idiom: null until Hilt injects it,
+    // and the zhipu stage of the search chain is then skipped.
+    private var zhipuSearchClient: ZhipuSearchClient? = null
+
+    /** Called by Hilt after construction; call manually in unit tests of the search chain. */
+    @Inject
+    internal fun injectZhipuSearch(client: ZhipuSearchClient) {
+        zhipuSearchClient = client
+    }
+
     // Same method-injection reason as splitPrefs above: keeps every existing test constructor
     // call intact. Null until Hilt injects it; add_charge then leaves the session unpriced
     // rather than inventing a rate.
@@ -475,8 +485,8 @@ class AgentTools @Inject constructor(
                 "\"что рядом\", \"какой это населённый пункт\"; не ищи координаты через web_search.",
             JSONObject(), emptyList(),
         ))
-        // Always declared: with no Exa key the execute path below falls back to the primary
-        // connection's native search (openrouter:web_search server tool or z.ai web_search).
+        // Always declared: the execute path walks the provider chain (zhipu / exa / the primary
+        // connection's native search — openrouter:web_search server tool or z.ai web_search).
         put(tool(
             "web_search",
             "Поиск в интернете по актуальным вопросам, которых нет в других инструментах.",
@@ -1253,45 +1263,75 @@ class AgentTools @Inject constructor(
 
     // --- web_search ---
 
-    // Exa failure falls through to the primary connection's native search; only when the
-    // whole chain fails does it collapse to the fixed Russian string: raw Throwable
-    // messages from search engines are English and must never reach the LLM.
+    // Search chain: the user's chosen provider (KEY_WEB_SEARCH_PROVIDER) is tried first, then
+    // the rest — zhipu ahead of exa, the primary connection's native search (openrouter
+    // server tool, z.ai web_search) last. Every stage falls through to the next on failure;
+    // only when the whole chain fails does it collapse to the fixed Russian string: raw
+    // Throwable messages from search engines are English and must never reach the LLM.
+    private enum class SearchStage { ZHIPU, EXA, OPENROUTER, ZAI }
+
     private suspend fun webSearch(args: JSONObject): String {
         val query = args.optString("query").trim()
         if (query.isEmpty()) return """{"error":"не указан запрос"}"""
-        val exaKey = runCatchingCancellable {
-            settingsRepository.getString(SettingsRepository.KEY_EXA_API_KEY, "")
-        }.getOrDefault("")
-        if (exaKey.isNotBlank()) {
-            exaSearchClient.search(exaKey, query).onSuccess { return it }
-            // Exa failed: fall through to the primary connection's native search.
+        val chosen = runCatchingCancellable {
+            settingsRepository.getString(SettingsRepository.KEY_WEB_SEARCH_PROVIDER, "")
+        }.getOrDefault("").ifBlank { SettingsRepository.PROVIDER_OPENROUTER }
+        val chain = buildList {
+            when (chosen) {
+                SettingsRepository.PROVIDER_ZHIPU -> add(SearchStage.ZHIPU)
+                SettingsRepository.PROVIDER_EXA -> add(SearchStage.EXA)
+                SettingsRepository.PROVIDER_OPENROUTER -> add(SearchStage.OPENROUTER)
+                SettingsRepository.PROVIDER_ZAI -> add(SearchStage.ZAI)
+            }
+            for (stage in listOf(SearchStage.ZHIPU, SearchStage.EXA, SearchStage.OPENROUTER, SearchStage.ZAI)) {
+                if (!contains(stage)) add(stage)
+            }
         }
-        return nativeSearch(query)
+        for (stage in chain) {
+            runSearchStage(stage, query)?.let { return it }
+        }
+        return SEARCH_ERROR
     }
 
-    /** Native search of the PRIMARY connection; custom connections have none. */
-    private suspend fun nativeSearch(query: String): String {
-        val conn = runCatchingCancellable { llmConnections.primary() }.getOrNull() ?: return SEARCH_ERROR
-        return when (conn.id) {
-            LlmConnectionResolver.ID_OPENROUTER -> openRouterWebSearch(conn, query)
-            LlmConnectionResolver.ID_ZAI ->
-                zaiSearchClient.search(conn.apiKey, query).getOrElse { SEARCH_ERROR }
-            else -> SEARCH_ERROR
+    /** One provider attempt: null = not configured or failed (the chain moves on). */
+    private suspend fun runSearchStage(stage: SearchStage, query: String): String? = when (stage) {
+        SearchStage.ZHIPU -> {
+            val key = runCatchingCancellable {
+                settingsRepository.getString(SettingsRepository.KEY_ZHIPU_SEARCH_API_KEY, "")
+            }.getOrDefault("")
+            if (key.isBlank()) null else zhipuSearchClient?.search(key, query)?.getOrNull()
+        }
+        SearchStage.EXA -> {
+            val key = runCatchingCancellable {
+                settingsRepository.getString(SettingsRepository.KEY_EXA_API_KEY, "")
+            }.getOrDefault("")
+            if (key.isBlank()) null else exaSearchClient.search(key, query).getOrNull()
+        }
+        SearchStage.OPENROUTER, SearchStage.ZAI -> {
+            // Native search rides on the PRIMARY connection's key; custom/Claude connections have none.
+            val conn = runCatchingCancellable { llmConnections.primary() }.getOrNull()
+            val wanted = if (stage == SearchStage.OPENROUTER) {
+                LlmConnectionResolver.ID_OPENROUTER
+            } else LlmConnectionResolver.ID_ZAI
+            when {
+                conn?.id != wanted -> null
+                stage == SearchStage.OPENROUTER -> openRouterWebSearch(conn, query)
+                else -> zaiSearchClient.search(conn.apiKey, query).getOrNull()
+            }
         }
     }
 
     /** One-shot completion with the openrouter:web_search server tool doing the search server-side. */
-    private suspend fun openRouterWebSearch(conn: LlmConnection, query: String): String {
+    private suspend fun openRouterWebSearch(conn: LlmConnection, query: String): String? {
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content",
                 "Найди в интернете актуальную информацию по запросу пользователя и изложи факты кратко, по-русски, с датами и источниками."))
             .put(JSONObject().put("role", "user").put("content", query))
         val tools = JSONArray().put(JSONObject().put("type", "openrouter:web_search"))
         val message = openRouterClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, messages, tools)
-            .getOrElse { return SEARCH_ERROR }
-        val content = if (message.isNull("content")) null
-            else message.optString("content").takeIf { it.isNotBlank() }
-        return content ?: SEARCH_ERROR
+            .getOrElse { return null }
+        return if (message.isNull("content")) null
+        else message.optString("content").takeIf { it.isNotBlank() }
     }
 
     // --- query_trips / query_charges ---

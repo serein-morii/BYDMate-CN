@@ -153,6 +153,17 @@
     <string name="settings_openrouter_model_pick">选择模型</string>
     <string name="settings_exa_section_header">Exa</string>
     <string name="settings_exa_search_hint">供语音智能体进行网络搜索。没有密钥时，搜索通过 OpenRouter 进行</string>
+    <string name="settings_search_section_header">搜索与天气</string>
+    <string name="settings_search_provider_label">优先搜索源</string>
+    <string name="settings_search_provider_hint">语音智能体优先使用的搜索源，其余作为备用</string>
+    <string name="settings_search_provider_openrouter">OpenRouter</string>
+    <string name="settings_search_provider_exa">Exa</string>
+    <string name="settings_search_provider_zai">z.ai</string>
+    <string name="settings_search_provider_zhipu">智谱</string>
+    <string name="settings_zhipu_api_key_label">智谱 API Key（网络搜索）</string>
+    <string name="settings_zhipu_search_hint">bigmodel.cn 的密钥：国内搜索更快且不被拦截。未填时使用 Exa 或当前连接的内置搜索</string>
+    <string name="settings_qweather_api_key_label">和风天气 API Key（天气）</string>
+    <string name="settings_qweather_hint">填写密钥后天气由和风天气提供（对国内城市更友好），未填时使用 Open-Meteo</string>
 
     <!-- Settings: Model picker dialog -->
     <string name="settings_model_picker_title">选择模型</string>
@@ -218,6 +229,12 @@
     <string name="settings_autostart_open_button">自启动设置</string>
     <string name="settings_update_check_toggle_label">检查更新</string>
     <string name="settings_update_check_toggle_description">启动 30 秒后检查 GitHub 并提示更新</string>
+    <string name="settings_update_channel_label">更新源</string>
+    <string name="settings_update_channel_github">GitHub</string>
+    <string name="settings_update_channel_gitee">Gitee</string>
+    <string name="settings_update_channel_ghproxy">gh-proxy.com</string>
+    <string name="settings_update_channel_ghproxy2">ghproxy.net</string>
+    <string name="settings_update_channel_hint">优先检查所选更新源，其余作为备用。镜像可加速国内 APK 下载；GitHub API 不可达时改走 Gitee。</string>
     <string name="settings_update_check_button">立即检查更新</string>
 
     <!-- Settings: Autoservice status -->
@@ -1496,6 +1513,7 @@
     <string name="settings_conn_check">检查</string>
     <string name="settings_conn_checking">检查中…</string>
     <string name="settings_zai_hint">免费方案，回复较慢。适合作为备用。</string>
+    <string name="settings_anthropic_hint">Claude 原生 API（Messages）。默认地址 https://api.anthropic.com</string>
     <string name="settings_custom_hint">任何兼容 OpenAI 的 API。预设会填入地址和模型，密钥需自备。</string>
     <string name="settings_custom_extra_json_label">附加请求参数 (JSON)</string>
     <string name="settings_custom_extra_json_hint">会加入发送到该服务器的每个请求，例如 {\"thinking\": false} 可关闭推理</string>
@@ -1506,6 +1524,9 @@
     <string name="settings_preset_hint_cloudflare">将地址中的 ACCOUNT_ID 替换为 Cloudflare 控制台中的账户 ID。免费约每天 450 次请求（glm-4.7-flash）。</string>
     <string name="settings_preset_hint_vercel">每月 5$ 额度，无需银行卡。免费套餐部分模型可能返回 403 错误。</string>
     <string name="settings_preset_hint_kimi">每天 1000 次免费请求。</string>
+    <string name="settings_preset_hint_glm">glm-4.7-flash 模型免费，其余按 token 计费。</string>
+    <string name="settings_preset_hint_qwen">qwen-plus 模型，按 token 计费。</string>
+    <string name="settings_preset_hint_claude">Anthropic 官方 API，按 token 计费。</string>
     <string name="settings_preset_hint_nanogpt">每月 8$ 订阅，加密货币支付。</string>
     <string name="settings_preset_hint_deepseek">按量付费，莫斯科时间夜间五折。</string>
     <string name="settings_preset_hint_mistral">免费，需手机验证。</string>

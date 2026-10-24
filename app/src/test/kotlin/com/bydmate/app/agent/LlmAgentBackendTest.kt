@@ -18,7 +18,8 @@ class LlmAgentBackendTest {
 
     private val client = mockk<OpenRouterClient>()
     private val resolver = mockk<LlmConnectionResolver>()
-    private val backend = LlmAgentBackend(client, resolver)
+    private val anthropic = mockk<com.bydmate.app.data.remote.AnthropicClient>()
+    private val backend = LlmAgentBackend(client, anthropic, resolver)
 
     private fun conn(id: String, base: String = "https://$id/v1", extraJson: String = "") =
         LlmConnection(id, id, base, "key-$id", "model-$id", extraJson)

@@ -16,7 +16,7 @@ data class LlmConnection(
 )
 
 /**
- * Resolves the three connection slots (OpenRouter / z.ai / custom) from the settings
+ * Resolves the connection slots (OpenRouter / z.ai / Claude / custom) from the settings
  * table. A connection is "configured" when every field it needs is non-blank; the
  * z.ai slot pins its model (free flash tier) so only the key is required.
  */
@@ -37,6 +37,17 @@ class LlmConnectionResolver @Inject constructor(
             if (key.isBlank()) null
             else LlmConnection(ID_ZAI, "z.ai", ZAI_BASE_URL, key, ZAI_MODEL)
         }
+        ID_ANTHROPIC -> {
+            val key = str(SettingsRepository.KEY_ANTHROPIC_API_KEY)
+            val model = str(SettingsRepository.KEY_ANTHROPIC_MODEL)
+            if (key.isBlank() || model.isBlank()) null
+            else LlmConnection(
+                ID_ANTHROPIC, "Claude",
+                str(SettingsRepository.KEY_ANTHROPIC_BASE_URL).trim().trimEnd('/')
+                    .ifBlank { ANTHROPIC_BASE_URL },
+                key, model,
+            )
+        }
         ID_CUSTOM -> {
             val url = str(SettingsRepository.KEY_CUSTOM_BASE_URL).trim().trimEnd('/')
             val key = str(SettingsRepository.KEY_CUSTOM_API_KEY)
@@ -53,7 +64,7 @@ class LlmConnectionResolver @Inject constructor(
     }
 
     suspend fun configured(): List<LlmConnection> =
-        listOf(ID_OPENROUTER, ID_ZAI, ID_CUSTOM).mapNotNull { get(it) }
+        listOf(ID_OPENROUTER, ID_ZAI, ID_ANTHROPIC, ID_CUSTOM).mapNotNull { get(it) }
 
     /**
      * The chosen primary slot, or — when it is unset or not fully configured — the first
@@ -78,10 +89,12 @@ class LlmConnectionResolver @Inject constructor(
     companion object {
         const val ID_OPENROUTER = "openrouter"
         const val ID_ZAI = "zai"
+        const val ID_ANTHROPIC = "anthropic"
         const val ID_CUSTOM = "custom"
         const val OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
         const val ZAI_BASE_URL = "https://api.z.ai/api/paas/v4"
         const val ZAI_MODEL = "glm-4.7-flash"
+        const val ANTHROPIC_BASE_URL = "https://api.anthropic.com"
         // Selector label when the user left the custom connection unnamed (agent UI is Russian-first).
         internal const val DEFAULT_CUSTOM_LABEL = "Своё"
     }

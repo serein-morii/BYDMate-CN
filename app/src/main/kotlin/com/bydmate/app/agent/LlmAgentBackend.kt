@@ -1,6 +1,7 @@
 package com.bydmate.app.agent
 
 import android.util.Log
+import com.bydmate.app.data.remote.AnthropicClient
 import com.bydmate.app.data.remote.LlmHttpException
 import com.bydmate.app.data.remote.OpenRouterClient
 import com.bydmate.app.diagnostics.Trace
@@ -15,7 +16,7 @@ class LlmError(val userMessage: String, cause: Throwable? = null) : Exception(us
 
 /**
  * OpenAI-compatible [AgentBackend] over configurable connections (OpenRouter / z.ai /
- * custom). The primary connection is retried once on transient failures (timeout, 429,
+ * Claude / custom). The primary connection is retried once on transient failures (timeout, 429,
  * 5xx); any remaining failure hands over to the fallback connection when one is set.
  * Both extra attempts are budgeted from the start of the turn ([RETRY_BUDGET_MS] /
  * [FALLBACK_BUDGET_MS]): an attempt that already burned its call timeout means a dead
@@ -24,6 +25,7 @@ class LlmError(val userMessage: String, cause: Throwable? = null) : Exception(us
 @Singleton
 class LlmAgentBackend @Inject constructor(
     private val client: OpenRouterClient,
+    private val anthropicClient: AnthropicClient,
     private val connections: LlmConnectionResolver,
 ) : AgentBackend {
 
@@ -113,7 +115,12 @@ class LlmAgentBackend @Inject constructor(
         withExtras: Boolean,
     ): Result<AgentReply> {
         val startMs = nowMs()
-        return (
+        // Claude speaks a different wire: AnthropicClient translates to/from the Messages API
+        // and is non-streaming — when no delta reached the caller the voice layer speaks the
+        // whole answer from the result, so the driver still hears it.
+        val raw = if (conn.id == LlmConnectionResolver.ID_ANTHROPIC) {
+            anthropicClient.chatRaw(conn.baseUrl, conn.apiKey, conn.model, wire, tools)
+        } else (
             if (onDelta != null) client.chatStream(
                 conn.baseUrl, conn.apiKey, conn.model, wire, tools,
                 if (withExtras) providerExtras(conn, streaming = true) else null, onDelta,
@@ -122,7 +129,8 @@ class LlmAgentBackend @Inject constructor(
                 conn.baseUrl, conn.apiKey, conn.model, wire, tools,
                 if (withExtras) providerExtras(conn, streaming = false) else null,
             )
-        ).map { parseReply(it) }.also { result ->
+        )
+        return raw.map { parseReply(it) }.also { result ->
             val tookMs = nowMs() - startMs
             if (result.isFailure || tookMs > Trace.SLOW_CALL_MS) {
                 Trace.call("llm", conn.baseUrl.toHttpUrlOrNull()?.host ?: conn.id, tookMs, result.exceptionOrNull())

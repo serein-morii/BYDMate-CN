@@ -14,7 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,12 +24,21 @@ class UpdateChecker @Inject constructor(
     private val appStrings: AppStrings,
 ) {
     companion object {
-        private const val GITHUB_API = "https://api.github.com/repos/AndyShaman/BYDMate/releases/latest"
         private const val PREFS_NAME = "update_prefs"
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_AUTO_CHECK = "auto_check_enabled"
         private const val KEY_LAST_SEEN_VERSION = "last_seen_version"
+        private const val KEY_UPDATE_CHANNEL = "update_channel"
         private const val CHECK_INTERVAL_MS = 10 * 60 * 1000L // 10 minutes (protects only against repeated launches within one session)
+
+        /** Default release channel; see [UpdateChannels]. */
+        const val DEFAULT_UPDATE_CHANNEL = UpdateChannels.DEFAULT_CHANNEL
+
+        /** Channel ids for the settings UI, in display order. */
+        const val CHANNEL_GITHUB = UpdateChannels.CHANNEL_GITHUB
+        const val CHANNEL_GITEE = UpdateChannels.CHANNEL_GITEE
+        const val CHANNEL_GHPROXY = UpdateChannels.CHANNEL_GHPROXY
+        const val CHANNEL_GHPROXY2 = UpdateChannels.CHANNEL_GHPROXY2
 
         fun isAutoCheckEnabled(context: Context): Boolean =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -39,6 +47,17 @@ class UpdateChecker @Inject constructor(
         fun setAutoCheckEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_AUTO_CHECK, enabled).apply()
+        }
+
+        /** Release channel the update check tries first (UpdateChannels.*). */
+        fun getUpdateChannel(context: Context): String =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_UPDATE_CHANNEL, DEFAULT_UPDATE_CHANNEL)
+                ?: DEFAULT_UPDATE_CHANNEL
+
+        fun setUpdateChannel(context: Context, channel: String) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_UPDATE_CHANNEL, channel).apply()
         }
 
         fun getLastSeenVersion(context: Context): String? =
@@ -57,6 +76,14 @@ class UpdateChecker @Inject constructor(
         val releaseNotes: String
     )
 
+    /**
+     * Checks the release channels in order — the user's choice first, the rest as fallbacks —
+     * and returns the first NEWER release found. A channel that cannot answer (network, HTTP,
+     * parse, release without an APK) just moves the check to the next one; a channel that did
+     * answer settles "is there an update" even when later channels failed, so only a check
+     * where every channel failed throws. A walled-off GitHub does not blind the updater while
+     * Gitee answers.
+     */
     suspend fun checkForUpdate(context: Context, forceCheck: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val lastCheck = prefs.getLong(KEY_LAST_CHECK, 0)
@@ -66,46 +93,42 @@ class UpdateChecker @Inject constructor(
 
         prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
 
+        val currentVersion = getAppVersion(context)
+        var lastFailure: Exception? = null
+        var answered = false
+        for (source in UpdateChannels.sources(getUpdateChannel(context))) {
+            try {
+                val release = fetchRelease(source) ?: continue
+                answered = true
+                if (!isNewer(release.tag, currentVersion)) continue
+                if (release.apkUrl == null) throw Exception("Нет APK в релизе ${release.tag}")
+                return@withContext UpdateInfo(
+                    version = release.tag,
+                    downloadUrl = source.apkUrl(release.apkUrl),
+                    releaseNotes = release.notes
+                )
+            } catch (e: Exception) {
+                lastFailure = e
+            }
+        }
+        if (answered) return@withContext null // every answer agreed: up to date
+        throw lastFailure ?: Exception("Нет доступных источников обновлений")
+    }
+
+    /** One channel API call; throws on network/HTTP problems, null only for a tagless body. */
+    private fun fetchRelease(source: UpdateChannels.Source): UpdateChannels.Release? {
         val request = Request.Builder()
-            .url(GITHUB_API)
+            .url(source.api)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "BYDMate-UpdateCheck")
             .build()
         val body = httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                throw Exception("GitHub API: HTTP ${response.code}")
+                throw Exception("Releases API: HTTP ${response.code}")
             }
-            response.body?.string() ?: throw Exception("Пустой ответ от GitHub")
+            response.body?.string() ?: throw Exception("Пустой ответ от Releases API")
         }
-
-        val json = JSONObject(body)
-        val tagName = json.optString("tag_name", "").removePrefix("v")
-        val currentVersion = getAppVersion(context)
-
-        if (tagName.isEmpty()) throw Exception("Нет tag_name в ответе GitHub")
-        if (tagName == currentVersion || !isNewer(tagName, currentVersion)) {
-            return@withContext null // genuinely up to date
-        }
-
-        val assets = json.optJSONArray("assets")
-            ?: throw Exception("Нет assets в релизе $tagName")
-        var apkUrl: String? = null
-        for (i in 0 until assets.length()) {
-            val asset = assets.getJSONObject(i)
-            val name = asset.optString("name", "")
-            if (name.endsWith(".apk")) {
-                apkUrl = asset.optString("browser_download_url")
-                break
-            }
-        }
-
-        if (apkUrl == null) throw Exception("Нет APK в релизе $tagName")
-
-        UpdateInfo(
-            version = tagName,
-            downloadUrl = apkUrl,
-            releaseNotes = json.optString("body", "")
-        )
+        return UpdateChannels.parseRelease(body)
     }
 
     /**
