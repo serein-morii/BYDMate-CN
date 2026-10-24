@@ -14,6 +14,7 @@ import com.bydmate.app.data.autoservice.AdbVerdict
 import com.bydmate.app.data.autoservice.CloudOverWifiState
 import com.bydmate.app.data.backup.AutoBackupPeriod
 import com.bydmate.app.data.backup.BackupPart
+import com.bydmate.app.data.push.PushChannel
 import com.bydmate.app.data.charging.ChargeConnector
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.cluster.ClusterProjectionManager
@@ -2859,6 +2860,8 @@ private fun AutoBackupRows(state: SettingsUiState, viewModel: SettingsViewModel)
         }
     }
     SettingDivider()
+    PushChannelRows(state, viewModel)
+    SettingDivider()
     TelegramBotRows(state, viewModel, tokenFocus, botBringer)
     SettingDivider()
     PowerOffReportRows(state, viewModel, tokenFocus, botBringer)
@@ -2939,6 +2942,111 @@ private fun PowerOffReportRows(
                     selected = selected,
                     onClick = { viewModel.toggleTgReportOffField(field) },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * «Канал уведомлений»: where reports and backup notes go. Telegram keeps the bot stepper below
+ * untouched; a chosen push channel shows its config fields and a test button instead. The block
+ * sits with the backup section, so it is visible exactly when that one is.
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun PushChannelRows(state: SettingsUiState, viewModel: SettingsViewModel) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(
+            stringResource(R.string.settings_push_title),
+            color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        )
+        Text(
+            stringResource(R.string.settings_push_desc),
+            color = TextSecondary, fontSize = 12.sp, lineHeight = 16.sp,
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            PushChannel.entries.forEach { channel ->
+                UnitChip(
+                    label = stringResource(channel.labelRes),
+                    selected = channel == state.pushChannel,
+                    onClick = { viewModel.setPushChannel(channel) },
+                )
+            }
+        }
+        when (state.pushChannel) {
+            // The telegram config is the bot stepper right below; nothing to add here.
+            PushChannel.TELEGRAM -> Unit
+            PushChannel.BARK -> {
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_bark_server_label),
+                    value = state.barkServer,
+                    onValueChange = { viewModel.updateBarkServer(it) },
+                    keyboardType = KeyboardType.Uri,
+                )
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_bark_key_label),
+                    value = state.barkDeviceKey,
+                    onValueChange = { viewModel.updateBarkDeviceKey(it) },
+                    keyboardType = KeyboardType.Text,
+                    secret = true,
+                )
+            }
+            PushChannel.WECOM -> SettingsTextField(
+                label = stringResource(R.string.settings_push_wecom_webhook_label),
+                value = state.wecomWebhookUrl,
+                onValueChange = { viewModel.updateWecomWebhookUrl(it) },
+                keyboardType = KeyboardType.Uri,
+            )
+            PushChannel.FEISHU -> {
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_feishu_webhook_label),
+                    value = state.feishuWebhookUrl,
+                    onValueChange = { viewModel.updateFeishuWebhookUrl(it) },
+                    keyboardType = KeyboardType.Uri,
+                )
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_sign_secret_label),
+                    value = state.feishuSecret,
+                    onValueChange = { viewModel.updateFeishuSecret(it) },
+                    keyboardType = KeyboardType.Password,
+                    secret = true,
+                )
+            }
+            PushChannel.DINGTALK -> {
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_ding_webhook_label),
+                    value = state.dingWebhookUrl,
+                    onValueChange = { viewModel.updateDingWebhookUrl(it) },
+                    keyboardType = KeyboardType.Uri,
+                )
+                SettingsTextField(
+                    label = stringResource(R.string.settings_push_sign_secret_label),
+                    value = state.dingSecret,
+                    onValueChange = { viewModel.updateDingSecret(it) },
+                    keyboardType = KeyboardType.Password,
+                    secret = true,
+                )
+            }
+        }
+        if (state.pushChannel != PushChannel.TELEGRAM) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = { viewModel.sendTestPush() },
+                    enabled = !state.pushTestRunning,
+                    shape = RoundedCornerShape(8.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentGreen, contentColor = NavyDark),
+                ) { Text(stringResource(R.string.settings_push_test), fontSize = 13.sp, fontWeight = FontWeight.Medium) }
+                state.pushTestStatus?.let { status ->
+                    Text(
+                        status,
+                        color = if (state.pushTestRunning) TextSecondary else AccentOrange,
+                        fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
     }

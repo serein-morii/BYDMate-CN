@@ -25,7 +25,10 @@ import com.bydmate.app.data.backup.BackupManager
 import com.bydmate.app.data.backup.TelegramBackupSink
 import com.bydmate.app.data.backup.TelegramChat
 import com.bydmate.app.data.backup.TelegramError
-import com.bydmate.app.data.backup.TelegramSinkException
+import com.bydmate.app.data.push.PushChannel
+import com.bydmate.app.data.push.PushDispatcher
+import com.bydmate.app.data.push.PushError
+import com.bydmate.app.data.push.PushFailure
 import com.bydmate.app.data.telegram.ReportField
 import com.bydmate.app.data.local.EnergyDataReader
 import com.bydmate.app.data.local.HistoryImporter
@@ -242,6 +245,18 @@ data class SettingsUiState(
     val tgReportOffFields: Set<ReportField> = ReportField.DEFAULT,
     /** «Отправлять записанный лог в Telegram» (#324). */
     val tgLogAutoSendEnabled: Boolean = false,
+    // Push channels: where reports and backup notes go; telegram keeps the bot flow below.
+    val pushChannel: PushChannel = PushChannel.TELEGRAM,
+    val barkServer: String = "",
+    val barkDeviceKey: String = "",
+    val wecomWebhookUrl: String = "",
+    val feishuWebhookUrl: String = "",
+    val feishuSecret: String = "",
+    val dingWebhookUrl: String = "",
+    val dingSecret: String = "",
+    /** Progress or error of the last test notification; null = nothing to say. */
+    val pushTestStatus: String? = null,
+    val pushTestRunning: Boolean = false,
     /** Status of the last fid-catalog dump. Null = idle. Red if starts with error prefix. */
     val fidDumpStatus: String? = null,
     val mapTileSource: String = SettingsRepository.DEFAULT_MAP_TILE_SOURCE,
@@ -378,6 +393,10 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
     private val appStrings: AppStrings,
     private val logTelegramSender: com.bydmate.app.diagnostics.LogTelegramSender,
     private val telegramReporter: com.bydmate.app.data.telegram.TelegramReporter,
+    // A default keeps the old test constructors compiling; production always injects the singleton.
+    private val pushDispatcher: PushDispatcher = PushDispatcher(
+        okhttp3.OkHttpClient(), TelegramBackupSink(okhttp3.OkHttpClient()), settingsRepository,
+    ),
     private val clusterMusicBridge: com.bydmate.app.media.ClusterMusicBridge,
     private val vehicleWriteLogDao: com.bydmate.app.data.local.dao.VehicleWriteLogDao,
     private val vehicleKindMonitor: com.bydmate.app.data.nativestack.VehicleKindMonitor,
@@ -552,6 +571,16 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             val webhookUrl = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_URL, "")
             val webhookSecret = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_SECRET, "")
             val webhookSendLocation = settingsRepository.getString(SettingsRepository.KEY_WEBHOOK_SEND_LOCATION, "false") == "true"
+
+            // Push channels (telegram keeps the bot binding below)
+            val pushChannel = PushChannel.fromKey(settingsRepository.getPushChannel())
+            val barkServer = settingsRepository.getBarkServer()
+            val barkDeviceKey = settingsRepository.getBarkDeviceKey()
+            val wecomWebhookUrl = settingsRepository.getWecomWebhookUrl()
+            val feishuWebhookUrl = settingsRepository.getFeishuWebhookUrl()
+            val feishuSecret = settingsRepository.getFeishuSecret()
+            val dingWebhookUrl = settingsRepository.getDingWebhookUrl()
+            val dingSecret = settingsRepository.getDingSecret()
             val mapTileSource = settingsRepository.getMapTileSource()
             // Never chosen here (a reinstall after an uninstall with the toggle on): show what the
             // system has, so switching the toggle off brings the assistant back. The service's
@@ -651,6 +680,14 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
                     webhookUrl = webhookUrl,
                     webhookSecret = webhookSecret,
                     webhookSendLocation = webhookSendLocation,
+                    pushChannel = pushChannel,
+                    barkServer = barkServer,
+                    barkDeviceKey = barkDeviceKey,
+                    wecomWebhookUrl = wecomWebhookUrl,
+                    feishuWebhookUrl = feishuWebhookUrl,
+                    feishuSecret = feishuSecret,
+                    dingWebhookUrl = dingWebhookUrl,
+                    dingSecret = dingSecret,
                     mapTileSource = mapTileSource,
                     disableNativeAssistant = disableNativeAssistant,
                     voiceEnabled = voiceEnabled,
@@ -2693,11 +2730,18 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
             _uiState.update { it.copy(configStatus = appStrings.get(R.string.settings_export_in_progress)) }
             try {
                 settingsRepository.setManualBackupParts(parts)
-                val result = AutoBackupRunner(backupManager, telegramBackupSink, settingsRepository).saveManual(parts)
+                val runner = AutoBackupRunner(
+                    backupManager, telegramBackupSink, settingsRepository,
+                    appStrings = appStrings, dispatcher = pushDispatcher,
+                )
+                val result = runner.saveManual(parts)
+                val push = _uiState.value.pushChannel != PushChannel.TELEGRAM
                 val telegram = when {
-                    result.sent -> appStrings.get(R.string.settings_config_save_sent)
+                    result.sent -> appStrings.get(
+                        if (push) R.string.settings_config_save_sent_push else R.string.settings_config_save_sent,
+                    )
                     result.sendError != null -> appStrings.get(
-                        R.string.settings_config_save_send_failed,
+                        if (push) R.string.settings_config_save_send_failed_push else R.string.settings_config_save_send_failed,
                         telegramErrorText(appStrings.context, result.sendError),
                     )
                     else -> null
@@ -2868,6 +2912,57 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
         viewModelScope.launch { settingsRepository.setTgLogAutoSendEnabled(enabled) }
     }
 
+    // -------------------------------------------------------------------------
+    // Push channels (telegram keeps the bot flow above)
+    // -------------------------------------------------------------------------
+
+    /** The channel switch; every read happens per send, so the change is live at once. */
+    fun setPushChannel(channel: PushChannel) {
+        _uiState.update { it.copy(pushChannel = channel, pushTestStatus = null) }
+        Log.i(TAG_TG_REPORT, "push channel: ${channel.key}")
+        viewModelScope.launch { settingsRepository.setPushChannel(channel.key) }
+    }
+
+    /** One push-channel config field: the value persists as typed, the test button proves it. */
+    fun updateBarkServer(value: String) = savePushSetting(value.trim()) { settingsRepository.setBarkServer(it) }
+
+    fun updateBarkDeviceKey(value: String) = savePushSetting(value.trim()) { settingsRepository.setBarkDeviceKey(it) }
+
+    fun updateWecomWebhookUrl(value: String) = savePushSetting(value.trim()) { settingsRepository.setWecomWebhookUrl(it) }
+
+    fun updateFeishuWebhookUrl(value: String) = savePushSetting(value.trim()) { settingsRepository.setFeishuWebhookUrl(it) }
+
+    fun updateFeishuSecret(value: String) = savePushSetting(value.trim()) { settingsRepository.setFeishuSecret(it) }
+
+    fun updateDingWebhookUrl(value: String) = savePushSetting(value.trim()) { settingsRepository.setDingWebhookUrl(it) }
+
+    fun updateDingSecret(value: String) = savePushSetting(value.trim()) { settingsRepository.setDingSecret(it) }
+
+    private fun savePushSetting(value: String, save: suspend (String) -> Unit) {
+        viewModelScope.launch { save(value) }
+    }
+
+    /** «Отправить тестовое уведомление»: one message through the selected channel, end to end. */
+    fun sendTestPush() {
+        if (_uiState.value.pushTestRunning) return
+        _uiState.update {
+            it.copy(pushTestRunning = true, pushTestStatus = appStrings.get(R.string.settings_push_test_sending))
+        }
+        viewModelScope.launch {
+            val status = pushDispatcher.sendTest(appStrings.get(R.string.settings_push_test_message)).fold(
+                onSuccess = { appStrings.get(R.string.settings_push_test_sent) },
+                onFailure = { error ->
+                    appStrings.get(R.string.settings_error_with_message, pushErrorText(error))
+                },
+            )
+            _uiState.update { it.copy(pushTestRunning = false, pushTestStatus = status) }
+        }
+    }
+
+    private fun pushErrorText(error: Throwable): String =
+        (error as? PushFailure)?.let { telegramErrorText(appStrings.context, it.key) }
+            ?: error.message ?: "?"
+
     /** «Отчёт при выключении машины»; phase B arms the helper daemon from these settings. */
     fun setTgReportOffEnabled(enabled: Boolean) {
         _uiState.update { it.copy(tgReportOffEnabled = enabled) }
@@ -2963,7 +3058,7 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 
     private fun tgBackupError(error: Throwable): String = appStrings.get(
         R.string.settings_error_with_message,
-        (error as? TelegramSinkException)?.let { telegramErrorText(appStrings.context, it.key) } ?: error.message ?: "?",
+        (error as? PushFailure)?.let { telegramErrorText(appStrings.context, it.key) } ?: error.message ?: "?",
     )
 
     /**
@@ -3136,17 +3231,22 @@ class SettingsViewModel @Inject @Suppress("LongParameterList") constructor( // H
 }
 
 /** Human-readable name for [android.content.pm.PackageManager.getApplicationEnabledSetting] values. */
-/** Localized text for a [TelegramSinkException.key]; an unknown key is shown as is. */
+/**
+ * Localized text for a [PushFailure] key (telegram and push channels alike); an unknown key is
+ * shown as is. The push-only keys get their own lines, the shared ones reuse the telegram text.
+ */
 internal fun telegramErrorText(context: Context, key: String): String {
     if (key.startsWith("HTTP:")) return context.getString(R.string.settings_tg_error_http, key.removePrefix("HTTP:"))
-    val res = when (TelegramError.entries.firstOrNull { it.name == key }) {
-        TelegramError.BAD_TOKEN -> R.string.settings_tg_error_bad_token
-        TelegramError.NO_NETWORK -> R.string.settings_tg_error_no_network
-        TelegramError.NO_CHAT -> R.string.settings_tg_error_no_chat
-        TelegramError.TOO_LARGE -> R.string.settings_tg_error_too_large
-        TelegramError.WEBHOOK -> R.string.settings_tg_error_webhook
-        TelegramError.BAD_RESPONSE -> R.string.settings_tg_error_bad_response
-        TelegramError.HTTP, null -> return key
+    val res = when (key) {
+        TelegramError.BAD_TOKEN.name -> R.string.settings_tg_error_bad_token
+        TelegramError.NO_NETWORK.name -> R.string.settings_tg_error_no_network
+        TelegramError.NO_CHAT.name -> R.string.settings_tg_error_no_chat
+        TelegramError.TOO_LARGE.name -> R.string.settings_tg_error_too_large
+        TelegramError.WEBHOOK.name -> R.string.settings_tg_error_webhook
+        TelegramError.BAD_RESPONSE.name -> R.string.settings_tg_error_bad_response
+        PushError.BAD_URL.name -> R.string.settings_push_error_bad_url
+        PushError.UNSUPPORTED.name -> R.string.settings_push_error_unsupported
+        else -> return key
     }
     return context.getString(res)
 }
@@ -3154,6 +3254,7 @@ internal fun telegramErrorText(context: Context, key: String): String {
 /** Localized text for the stored auto backup result key (see [AutoBackupRunner] RESULT_*). */
 internal fun autoBackupResultText(context: Context, key: String): String = when {
     key == AutoBackupRunner.RESULT_SENT -> context.getString(R.string.settings_auto_backup_result_sent)
+    key == AutoBackupRunner.RESULT_SENT_PUSH -> context.getString(R.string.settings_auto_backup_result_sent_push)
     key == AutoBackupRunner.RESULT_LOCAL_ONLY -> context.getString(R.string.settings_auto_backup_result_local_only)
     key == AutoBackupRunner.RESULT_EXPORT_ERROR -> context.getString(R.string.settings_auto_backup_result_export_error)
     key.startsWith(AutoBackupRunner.RESULT_SEND_ERROR_PREFIX) -> context.getString(

@@ -5,7 +5,9 @@ import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.bydmate.app.data.push.PushDispatcher
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.util.AppStrings
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
@@ -19,11 +21,13 @@ class AutoBackupWorker @AssistedInject constructor(
     private val backupManager: BackupManager,
     private val sink: TelegramBackupSink,
     private val settingsRepository: SettingsRepository,
+    private val pushDispatcher: PushDispatcher,
+    private val appStrings: AppStrings,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
         val outcome = withContext(Dispatchers.IO) {
-            AutoBackupRunner(backupManager, sink, settingsRepository).run()
+            AutoBackupRunner(backupManager, sink, settingsRepository, appStrings = appStrings, dispatcher = pushDispatcher).run()
         }
         return when (capRetries(outcome, runAttemptCount)) {
             RunOutcome.SUCCESS -> Result.success()

@@ -7,6 +7,7 @@ import com.bydmate.app.data.backup.TelegramBackupSink
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.data.push.PushDispatcher
 import com.bydmate.app.data.remote.diParsData
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.trips.TripCounterResets
@@ -81,6 +82,8 @@ class TelegramReporterLocationTest {
         val sink = TelegramBackupSink(OkHttpClient(), server.url("/").toString().trimEnd('/'))
         reporter = TelegramReporter(
             ctx, sink, settings, mockk(relaxed = true), TripCounterResets(settings), AppStrings(ctx), PowerOffArmState(mockk()),
+            // The dispatcher must send through the same local Bot API the test sink points at.
+            dispatcher = PushDispatcher(OkHttpClient(), sink, settings),
         )
         place(minsk)
         reporter.language = { "ru" }

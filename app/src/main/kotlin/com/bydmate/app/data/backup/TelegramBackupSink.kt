@@ -1,6 +1,7 @@
 package com.bydmate.app.data.backup
 
 import android.util.Log
+import com.bydmate.app.data.push.PushFailure
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
@@ -32,8 +33,8 @@ enum class TelegramError { BAD_TOKEN, NO_NETWORK, NO_CHAT, TOO_LARGE, WEBHOOK, B
  * token or another 4xx answer will not heal by itself.
  */
 class TelegramSinkException(val error: TelegramError, val httpCode: Int? = null, cause: Throwable? = null) :
-    IOException("$error${httpCode?.let { " $it" }.orEmpty()}", cause) {
-    val transient: Boolean
+    IOException("$error${httpCode?.let { " $it" }.orEmpty()}", cause), PushFailure {
+    override val transient: Boolean
         get() = when (error) {
             TelegramError.NO_NETWORK, TelegramError.BAD_RESPONSE -> true
             TelegramError.HTTP -> httpCode == HTTP_TOO_MANY_REQUESTS || (httpCode ?: 0) >= HTTP_SERVER_ERROR
@@ -41,7 +42,7 @@ class TelegramSinkException(val error: TelegramError, val httpCode: Int? = null,
         }
 
     /** Stable key for settings and the dump: `BAD_TOKEN`, `HTTP:502`, … */
-    val key: String get() = if (error == TelegramError.HTTP) "HTTP:$httpCode" else error.name
+    override val key: String get() = if (error == TelegramError.HTTP) "HTTP:$httpCode" else error.name
 
     private companion object {
         const val HTTP_TOO_MANY_REQUESTS = 429

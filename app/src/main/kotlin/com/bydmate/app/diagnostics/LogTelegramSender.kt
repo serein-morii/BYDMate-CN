@@ -3,7 +3,9 @@ package com.bydmate.app.diagnostics
 import android.util.Log
 import com.bydmate.app.R
 import com.bydmate.app.data.backup.TelegramBackupSink
-import com.bydmate.app.data.backup.TelegramSinkException
+import com.bydmate.app.data.push.PushChannel
+import com.bydmate.app.data.push.PushDispatcher
+import com.bydmate.app.data.push.PushFailure
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.ui.settings.telegramErrorText
 import com.bydmate.app.util.AppStrings
@@ -31,6 +33,8 @@ class LogTelegramSender @Inject constructor(
     private val settings: SettingsRepository,
     private val sink: TelegramBackupSink,
     private val strings: AppStrings,
+    // A default keeps the old test constructor compiling; production always injects the singleton.
+    private val dispatcher: PushDispatcher = PushDispatcher(okhttp3.OkHttpClient(), sink, settings),
 ) {
     private val _sending = MutableStateFlow(false)
     val sending: StateFlow<Boolean> = _sending.asStateFlow()
@@ -51,6 +55,8 @@ class LogTelegramSender @Inject constructor(
             if (stopped.path == handledPath) return@collect
             handledPath = stopped.path
             if (!settings.isTgLogAutoSendEnabled()) return@collect
+            // Only the bot takes files: the other channels have nothing to upload automatically.
+            if (dispatcher.channel() != PushChannel.TELEGRAM) return@collect
             if (!settings.getTgBackupConfig().configured) {
                 Log.i(TAG, "log to telegram: auto skipped, no bot")
                 return@collect
@@ -72,6 +78,11 @@ class LogTelegramSender @Inject constructor(
     }
 
     private suspend fun upload(file: File): String {
+        // The button shows only with a bound bot; this covers a channel switch racing the tap.
+        if (dispatcher.channel() != PushChannel.TELEGRAM) {
+            Log.i(TAG, "log to telegram: skipped, push channel ${dispatcher.channel().key}")
+            return strings.get(R.string.settings_log_tg_push_only)
+        }
         val config = settings.getTgBackupConfig()
         // The button shows only with a bound bot; this covers a disconnect racing the tap.
         val chatId = config.chatId ?: return strings.get(R.string.settings_log_tg_failed, "?")
@@ -90,10 +101,10 @@ class LogTelegramSender @Inject constructor(
                 strings.get(R.string.settings_log_tg_sent)
             },
             onFailure = { error ->
-                Log.w(TAG, "log to telegram: failed ${(error as? TelegramSinkException)?.key ?: error.javaClass.simpleName}")
+                Log.w(TAG, "log to telegram: failed ${(error as? PushFailure)?.key ?: error.javaClass.simpleName}")
                 strings.get(
                     R.string.settings_log_tg_failed,
-                    (error as? TelegramSinkException)?.let { telegramErrorText(strings.context, it.key) } ?: "?",
+                    (error as? PushFailure)?.let { telegramErrorText(strings.context, it.key) } ?: "?",
                 )
             },
         )

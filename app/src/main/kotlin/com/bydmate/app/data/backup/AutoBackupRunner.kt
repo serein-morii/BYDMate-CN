@@ -1,9 +1,15 @@
 package com.bydmate.app.data.backup
 
 import android.util.Log
+import com.bydmate.app.R
+import com.bydmate.app.data.push.PushChannel
+import com.bydmate.app.data.push.PushDispatcher
+import com.bydmate.app.data.push.PushFailure
 import com.bydmate.app.data.repository.SettingsRepository
+import com.bydmate.app.util.AppStrings
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,8 +18,9 @@ import java.util.Locale
 enum class RunOutcome { SUCCESS, RETRY, FAILURE }
 
 /**
- * A manual save (#238): the file left in Download, [sent] = the bot got a copy, [sendError] = why it
- * did not (TelegramError name or exception class); both empty when no bot is connected.
+ * A manual save (#238): the file left in Download, [sent] = the channel got its copy (a text note
+ * on the push channels), [sendError] = why it did not (TelegramError or PushError key, or the
+ * exception class); both empty when the selected channel is not connected.
  */
 data class ManualSaveResult(val file: File, val sent: Boolean, val sendError: String?)
 
@@ -29,6 +36,11 @@ class AutoBackupRunner(
     private val backupManager: BackupManager,
     private val sink: TelegramBackupSink,
     private val settingsRepository: SettingsRepository,
+    // Defaults keep the old test constructors compiling; production always passes the singletons.
+    private val dispatcher: PushDispatcher = PushDispatcher(OkHttpClient(), TelegramBackupSink(OkHttpClient()), settingsRepository),
+    // null in the old tests: the note falls back to the caption's own language (see pushCaption).
+    private val appStrings: AppStrings? = null,
+    // Last, so the old trailing-lambda construction still binds the clock.
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     companion object {
@@ -41,6 +53,8 @@ class AutoBackupRunner(
 
         // last_result keys; Settings translates them, the dump prints them as is.
         const val RESULT_SENT = "sent"
+        /** Like [RESULT_SENT], but a push channel took a text note (files go only to Telegram). */
+        const val RESULT_SENT_PUSH = "sent_push"
         const val RESULT_LOCAL_ONLY = "local_only"
         const val RESULT_SEND_ERROR_PREFIX = "send_error:"
         const val RESULT_EXPORT_ERROR = "export_error"
@@ -60,6 +74,20 @@ class AutoBackupRunner(
 
     private suspend fun runLocked(): RunOutcome {
         val config = settingsRepository.getTgBackupConfig()
+        val pending = takePending()
+        val file = pending ?: exportAndRotate(config) ?: return RunOutcome.FAILURE
+        return deliver(file, config)
+    }
+
+    /**
+     * The file a previous telegram run left behind, or null. The pending queue is a Telegram-only
+     * thing (only the bot retries a zip): another channel clears any stale entry instead.
+     */
+    private suspend fun takePending(): File? {
+        if (dispatcher.channel() != PushChannel.TELEGRAM) {
+            settingsRepository.setAutoBackupPendingUpload("")
+            return null
+        }
         val pendingPath = settingsRepository.getAutoBackupPendingUpload()
         var pending = pendingPath.takeIf { it.isNotEmpty() }?.let(::File)?.takeIf { it.exists() }
         if (pending == null && pendingPath.isNotEmpty()) {
@@ -74,8 +102,7 @@ class AutoBackupRunner(
             pending = null
         }
         if (pending != null) Log.i(TAG, "retrying upload of ${pending.name}")
-        val file = pending ?: exportAndRotate(config) ?: return RunOutcome.FAILURE
-        return deliver(file, config)
+        return pending
     }
 
     private suspend fun isScheduleDue(): Boolean = isAutoBackupDue(
@@ -99,8 +126,10 @@ class AutoBackupRunner(
         Log.i(TAG, "exported ${file.name} ${file.length()} parts=${BackupPart.toCsv(parts)}")
         settingsRepository.setAutoBackupLastTs(clock())
         // Pending before any network call: a run cancelled or killed mid-upload leaves the file
-        // for the next attempt instead of losing it.
-        if (config.configured) settingsRepository.setAutoBackupPendingUpload(file.absolutePath)
+        // for the next attempt instead of losing it. Only telegram retries a file, so only it queues.
+        if (config.configured && dispatcher.channel() == PushChannel.TELEGRAM) {
+            settingsRepository.setAutoBackupPendingUpload(file.absolutePath)
+        }
         rotate(file)
         return file
     }
@@ -135,6 +164,7 @@ class AutoBackupRunner(
     suspend fun saveManual(parts: Set<BackupPart>): ManualSaveResult {
         val file = backupManager.export(parts)
         Log.i(TAG, "manual save ${file.name} ${file.length()} parts=${BackupPart.toCsv(parts)}")
+        if (dispatcher.channel() != PushChannel.TELEGRAM) return saveManualPush(file)
         val config = settingsRepository.getTgBackupConfig()
         val chatId = config.chatId
         if (!config.configured || chatId == null) return ManualSaveResult(file, sent = false, sendError = null)
@@ -146,11 +176,24 @@ class AutoBackupRunner(
         return ManualSaveResult(
             file,
             sent = error == null,
-            sendError = error?.let { (it as? TelegramSinkException)?.key ?: it.javaClass.simpleName },
+            sendError = error?.let { (it as? PushFailure)?.key ?: it.javaClass.simpleName },
+        )
+    }
+
+    /** A push channel takes no zip: the note says the copy stayed in Download, nothing is queued. */
+    private suspend fun saveManualPush(file: File): ManualSaveResult {
+        if (!dispatcher.isConfigured()) return ManualSaveResult(file, sent = false, sendError = null)
+        val error = dispatcher.sendReportText(pushCaption(file)).exceptionOrNull()
+        if (error != null) Log.w(TAG, "manual push failed: ${error.javaClass.simpleName}: ${error.message}")
+        return ManualSaveResult(
+            file,
+            sent = error == null,
+            sendError = error?.let { (it as? PushFailure)?.key ?: it.javaClass.simpleName },
         )
     }
 
     private suspend fun deliver(file: File, config: TgBackupConfig): RunOutcome {
+        if (dispatcher.channel() != PushChannel.TELEGRAM) return deliverPush(file)
         val chatId = config.chatId
         if (!config.configured || chatId == null) {
             settingsRepository.setAutoBackupPendingUpload("")
@@ -170,7 +213,7 @@ class AutoBackupRunner(
             settingsRepository.setAutoBackupLastResult(RESULT_SENT)
             return RunOutcome.SUCCESS
         }
-        val sinkError = error as? TelegramSinkException
+        val sinkError = error as? PushFailure
         settingsRepository.setAutoBackupLastResult(
             RESULT_SEND_ERROR_PREFIX + (sinkError?.key ?: error.javaClass.simpleName)
         )
@@ -183,6 +226,32 @@ class AutoBackupRunner(
         settingsRepository.setAutoBackupPendingUpload(file.absolutePath)
         return RunOutcome.RETRY
     }
+
+    /**
+     * The zip cannot go to a push channel: one text note goes instead, and a failed note is a
+     * permanent send error — nothing stays pending, the next run exports afresh.
+     */
+    private suspend fun deliverPush(file: File): RunOutcome {
+        settingsRepository.setAutoBackupPendingUpload("")
+        if (!dispatcher.isConfigured()) {
+            settingsRepository.setAutoBackupLastResult(RESULT_LOCAL_ONLY)
+            return RunOutcome.SUCCESS
+        }
+        val error = dispatcher.sendReportText(pushCaption(file)).exceptionOrNull()
+        if (error == null) {
+            settingsRepository.setAutoBackupLastResult(RESULT_SENT_PUSH)
+            return RunOutcome.SUCCESS
+        }
+        Log.w(TAG, "push note failed: ${error.javaClass.simpleName}: ${error.message}")
+        settingsRepository.setAutoBackupLastResult(
+            RESULT_SEND_ERROR_PREFIX + ((error as? PushFailure)?.key ?: error.javaClass.simpleName)
+        )
+        return RunOutcome.SUCCESS
+    }
+
+    /** The caption plus one line saying where the file itself is (the channels take only text). */
+    private fun pushCaption(file: File): String = caption(file) + "\n" + (appStrings?.get(R.string.settings_auto_backup_push_note)
+        ?: "Файл отправить нельзя: файлы принимает только Telegram-бот. Копия сохранена в Download")
 
     private fun caption(file: File): String {
         val ru = Locale("ru")

@@ -8,6 +8,8 @@ import com.bydmate.app.data.telegram.ReportField
 import com.bydmate.app.data.local.LocalePreferences
 import com.bydmate.app.data.local.dao.SettingsDao
 import com.bydmate.app.data.local.entity.SettingEntity
+import com.bydmate.app.data.push.BarkClient
+import com.bydmate.app.data.push.PushChannel
 import com.bydmate.app.data.trips.TripAutoResetMode
 import com.bydmate.app.data.trips.TripResetState
 import kotlinx.coroutines.flow.Flow
@@ -126,6 +128,19 @@ open class SettingsRepository @Inject constructor(
         const val KEY_TG_REPORT_OUTBOX = "tg_report_outbox"
         /** "true" = a finished log recording goes to the bot by itself (#324). */
         const val KEY_TG_LOG_AUTO_SEND = "tg_log_auto_send"
+        // Push channels: reports and notifications go to the selected one, telegram is the default.
+        const val KEY_PUSH_CHANNEL = "push_channel" // PushChannel.key
+        /** Bark (iOS push app): server root and the device key the Bark app shows. */
+        const val KEY_BARK_SERVER = "bark_server"
+        const val KEY_BARK_DEVICE_KEY = "bark_device_key"
+        /** WeCom (企业微信) group robot: the full webhook url (its query key is the secret). */
+        const val KEY_WECOM_WEBHOOK_URL = "wecom_webhook_url"
+        /** Feishu custom robot: webhook url and the optional signing secret. */
+        const val KEY_FEISHU_WEBHOOK_URL = "feishu_webhook_url"
+        const val KEY_FEISHU_SECRET = "feishu_secret"
+        /** DingTalk custom robot: webhook url and the optional signing secret. */
+        const val KEY_DING_WEBHOOK_URL = "ding_webhook_url"
+        const val KEY_DING_SECRET = "ding_secret"
         const val KEY_DATA_SOURCE = "data_source"
         const val KEY_MAP_TILE_SOURCE = "map_tile_source"
         const val KEY_AUTOSERVICE_ENABLED = "autoservice_enabled"
@@ -611,6 +626,40 @@ open class SettingsRepository @Inject constructor(
     suspend fun setTgLogAutoSendEnabled(enabled: Boolean) = setString(KEY_TG_LOG_AUTO_SEND, enabled.toString())
 
     fun observeTgLogAutoSendEnabled(): Flow<Boolean> = observeString(KEY_TG_LOG_AUTO_SEND).map { it == "true" }
+
+    // --- Push channels (telegram + the text-only robots) ---
+
+    suspend fun getPushChannel(): String = getString(KEY_PUSH_CHANNEL, PushChannel.TELEGRAM.key)
+
+    suspend fun setPushChannel(key: String) = setString(KEY_PUSH_CHANNEL, key)
+
+    suspend fun getBarkServer(): String = getString(KEY_BARK_SERVER, BarkClient.DEFAULT_SERVER)
+
+    suspend fun setBarkServer(url: String) = setString(KEY_BARK_SERVER, url)
+
+    suspend fun getBarkDeviceKey(): String = getString(KEY_BARK_DEVICE_KEY, "")
+
+    suspend fun setBarkDeviceKey(key: String) = setString(KEY_BARK_DEVICE_KEY, key)
+
+    suspend fun getWecomWebhookUrl(): String = getString(KEY_WECOM_WEBHOOK_URL, "")
+
+    suspend fun setWecomWebhookUrl(url: String) = setString(KEY_WECOM_WEBHOOK_URL, url)
+
+    suspend fun getFeishuWebhookUrl(): String = getString(KEY_FEISHU_WEBHOOK_URL, "")
+
+    suspend fun setFeishuWebhookUrl(url: String) = setString(KEY_FEISHU_WEBHOOK_URL, url)
+
+    suspend fun getFeishuSecret(): String = getString(KEY_FEISHU_SECRET, "")
+
+    suspend fun setFeishuSecret(secret: String) = setString(KEY_FEISHU_SECRET, secret)
+
+    suspend fun getDingWebhookUrl(): String = getString(KEY_DING_WEBHOOK_URL, "")
+
+    suspend fun setDingWebhookUrl(url: String) = setString(KEY_DING_WEBHOOK_URL, url)
+
+    suspend fun getDingSecret(): String = getString(KEY_DING_SECRET, "")
+
+    suspend fun setDingSecret(secret: String) = setString(KEY_DING_SECRET, secret)
 
     suspend fun getTechCardOrder(): String =
         getString(KEY_TECH_CARD_ORDER, "")

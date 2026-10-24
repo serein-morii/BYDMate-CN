@@ -43,6 +43,7 @@ class LogTelegramSenderTest {
     @Before fun setUp() {
         coEvery { settings.isTgLogAutoSendEnabled() } answers { autoSend }
         coEvery { settings.getTgBackupConfig() } answers { config }
+        coEvery { settings.getPushChannel() } returns "telegram"
         coEvery { sink.sendDocument(any(), any(), any(), any()) } returns Result.success(Unit)
         sender = LogTelegramSender(recorder, settings, sink, AppStrings(ctx))
     }

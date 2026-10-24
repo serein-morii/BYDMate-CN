@@ -4,11 +4,12 @@ import android.content.Context
 import android.util.Log
 import com.bydmate.app.R
 import com.bydmate.app.data.backup.TelegramBackupSink
-import com.bydmate.app.data.backup.TelegramSinkException
-import com.bydmate.app.data.backup.TgBackupConfig
 import com.bydmate.app.data.local.dao.TripDao
 import com.bydmate.app.data.nativestack.VehicleKind
 import com.bydmate.app.data.nativestack.VehicleKindMonitor
+import com.bydmate.app.data.push.PushChannel
+import com.bydmate.app.data.push.PushDispatcher
+import com.bydmate.app.data.push.PushFailure
 import com.bydmate.app.data.repository.SettingsRepository
 import com.bydmate.app.data.trips.TripCounterMath
 import com.bydmate.app.data.trips.TripCounterResets
@@ -20,6 +21,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.OkHttpClient
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -31,9 +33,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * A report entry waiting for the network; [chatId] is the chat it was built for. [lateMark] = add
- * «(записано в HH:MM)» when it goes out late. The power-off report never comes here: the helper
- * daemon delivers it, pending ones included.
+ * A report entry waiting for the network; [chatId] is the chat it was built for (0 on the push
+ * channels, which have no chat). [lateMark] = add «(записано в HH:MM)» when it goes out late. The
+ * power-off report never comes here: the helper daemon delivers it, pending ones included.
  */
 data class OutboxEntry(
     val id: String,
@@ -59,10 +61,11 @@ data class PowerOffReport(
 }
 
 /**
- * Telegram reports (3.19): builds them from the live state, sends them through the backup bot and
- * keeps the ones that met no network in a small outbox on disk ([SettingsRepository.KEY_TG_REPORT_OUTBOX]).
- * The log gets ids, field names, lengths and error keys only: never the token, the chat, the text
- * or the coordinates, since users post their logs in public issues.
+ * Reports (3.19): builds them from the live state, sends them through the push channel chosen in
+ * the settings ([PushDispatcher]) and keeps the ones that met no network in a small outbox on disk
+ * ([SettingsRepository.KEY_TG_REPORT_OUTBOX]). The log gets ids, field names, lengths and error
+ * keys only: never the token, the chat, the text or the coordinates, since users post their logs
+ * in public issues.
  */
 @Singleton
 // Send, outbox on disk and the dump, kept in one place; Hilt-injected dependencies.
@@ -76,23 +79,24 @@ class TelegramReporter @Inject constructor(
     private val appStrings: AppStrings,
     private val offState: PowerOffArmState,
     private val vehicleKindMonitor: VehicleKindMonitor? = null,
+    // A default keeps the old test constructors compiling; production always injects the singleton.
+    private val dispatcher: PushDispatcher = PushDispatcher(OkHttpClient(), TelegramBackupSink(OkHttpClient()), settings),
 ) {
     companion object {
         private const val TAG = "TgReport"
         const val OUTBOX_MAX = 10
         /** A report sent later than this after it was built gets «(записано в HH:MM)». */
         const val LATE_MARK_AFTER_MS = 2 * 60_000L
-        private const val PARSE_MODE = "HTML"
         private const val RECENT_TRIPS = 5
         private const val FUEL_CACHE_TTL_MS = 60_000L
     }
 
     sealed interface SendResult {
         data object Sent : SendResult
-        /** No network or Telegram busy: the report waits in the outbox. */
+        /** No network or the channel busy: the report waits in the outbox. */
         data object Queued : SendResult
         data object NotConnected : SendResult
-        /** A failure that will not heal by retrying: [key] as in [TelegramSinkException.key]. */
+        /** A failure that will not heal by retrying: [key] as in [PushFailure.key]. */
         data class Failed(val key: String) : SendResult
     }
 
@@ -123,15 +127,13 @@ class TelegramReporter @Inject constructor(
 
     /** The `telegram_report` automation action: header «BYDMate: <rule name>». */
     suspend fun sendRuleReport(ruleName: String?, fields: Set<ReportField>, customText: String): SendResult {
-        val config = settings.getTgBackupConfig()
-        val id = newId()
-        val chatId = config.chatId
-        if (!config.configured || chatId == null) {
-            Log.w(TAG, "rule report id=$id skipped: bot not connected")
+        if (!dispatcher.isConfigured()) {
+            Log.w(TAG, "rule report skipped: channel not connected")
             return SendResult.NotConnected
         }
+        val id = newId()
         val built = build(id, "rule", TelegramReportBuilder.ruleHeader(ruleName), customText, fields)
-        return deliver(id, config, chatId, built.report.text, built.builtAtMs)
+        return deliver(id, built.report.text, built.builtAtMs)
     }
 
     /**
@@ -142,6 +144,9 @@ class TelegramReporter @Inject constructor(
      */
     suspend fun powerOffReport(previous: PowerOffReport? = null): PowerOffReport? {
         if (!settings.isTgReportOffEnabled()) return null
+        // Known limitation: the helper daemon delivers this report itself and only speaks the Bot
+        // API, so the power-off report stays a Telegram-only feature (null = the daemon disarms).
+        if (dispatcher.channel() != PushChannel.TELEGRAM) return null
         val config = settings.getTgBackupConfig()
         val chatId = config.chatId
         if (!config.configured || chatId == null) return null
@@ -157,8 +162,8 @@ class TelegramReporter @Inject constructor(
 
     /**
      * Sends what the outbox holds, oldest first: at service start, when the internet comes back and
-     * after every report that went through. Stops at the first temporary failure; a report whose bot
-     * was disconnected or whose chat changed is dropped, so it never lands in someone else's chat.
+     * after every report that went through. Stops at the first temporary failure; a report whose
+     * bot was disconnected or whose chat changed is dropped, so it never lands in someone else's chat.
      */
     suspend fun drainOutbox(reason: String) {
         drainGeneration.incrementAndGet()
@@ -166,10 +171,13 @@ class TelegramReporter @Inject constructor(
             var queue = loadOutbox()
             if (queue.isEmpty()) return
             Log.i(TAG, "outbox drain reason=$reason size=${queue.size}")
-            val config = settings.getTgBackupConfig()
+            val telegram = dispatcher.channel() == PushChannel.TELEGRAM
+            val config = if (telegram) settings.getTgBackupConfig() else null
             while (queue.isNotEmpty()) {
                 val entry = queue.first()
-                if (!config.configured || config.chatId != entry.chatId) {
+                // The chat-changed check needs a chat: only telegram entries carry one, the other
+                // channels queue with chat 0 and keep the queue across a channel switch.
+                if (config != null && (config.chatId != entry.chatId || !config.configured)) {
                     val why = if (config.configured) "chat_changed" else "not_connected"
                     Log.w(TAG, "outbox drop id=${entry.id} reason=$why")
                     queue = queue.drop(1)
@@ -179,7 +187,7 @@ class TelegramReporter @Inject constructor(
                 val now = clock()
                 val late = entry.lateMark && now - entry.createdMs > LATE_MARK_AFTER_MS
                 val text = if (late) TelegramReportBuilder.withLateMark(entry.text, lateMark(entry.createdMs, now)) else entry.text
-                val result = sink.sendMessage(config.token, entry.chatId, text, PARSE_MODE, linkPreview = false)
+                val result = dispatcher.sendReportText(text)
                 val failure = result.exceptionOrNull()
                 val ageS = (now - entry.createdMs) / 1000
                 when {
@@ -198,7 +206,7 @@ class TelegramReporter @Inject constructor(
                 }
                 saveOutbox(queue)
                 // Only once the report is off the disk: a point cut short never sends it again.
-                if (failure == null) sendPoint(entry.id, config.token, entry.chatId, text)
+                if (failure == null && telegram) sendPoint(entry.id, text)
             }
         }
     }
@@ -242,19 +250,19 @@ class TelegramReporter @Inject constructor(
         )
     }
 
-    private suspend fun deliver(id: String, config: TgBackupConfig, chatId: Long, text: String, builtAtMs: Long): SendResult {
+    private suspend fun deliver(id: String, text: String, builtAtMs: Long): SendResult {
         val generationBeforeSend = drainGeneration.get()
-        val failure = sink.sendMessage(config.token, chatId, text, PARSE_MODE, linkPreview = false).exceptionOrNull()
+        val failure = dispatcher.sendReportText(text).exceptionOrNull()
         return when {
             failure == null -> {
                 Log.i(TAG, "send id=$id rc=ok")
-                sendPoint(id, config.token, chatId, text)
+                sendPoint(id, text)
                 drainOutbox("after_send")
                 SendResult.Sent
             }
             isTransient(failure) -> {
                 Log.w(TAG, "send id=$id rc=${errorKey(failure)} -> outbox")
-                enqueue(OutboxEntry(id, chatId, builtAtMs, text))
+                enqueue(OutboxEntry(id, dispatcher.reportChatId(), builtAtMs, text))
                 // A drain that ran while the send was in flight found this report not queued yet
                 // (see drainGeneration doc): run it once more so it is not stuck until the next trigger.
                 if (drainGeneration.get() != generationBeforeSend) drainOutbox("late_edge")
@@ -268,12 +276,14 @@ class TelegramReporter @Inject constructor(
     }
 
     /**
-     * The native location under a report Telegram took, from the report's own map link: one attempt,
-     * never queued. Its failure is one log line; the report itself stays delivered.
+     * The native location under a report the bot took, from the report's own map link: one attempt,
+     * never queued. Its failure is one log line; the report itself stays delivered. Telegram only:
+     * the other channels got the map link as text with the report.
      */
-    private suspend fun sendPoint(id: String, token: String, chatId: Long, text: String) {
+    private suspend fun sendPoint(id: String, text: String) {
+        if (dispatcher.channel() != PushChannel.TELEGRAM) return
         val point = TelegramReportBuilder.mapPoint(text) ?: return
-        val failure = sink.sendLocation(token, chatId, point.latitude, point.longitude).exceptionOrNull()
+        val failure = dispatcher.sendLocation(point.latitude, point.longitude).exceptionOrNull()
         if (failure == null) Log.i(TAG, "location id=$id rc=ok")
         else Log.w(TAG, "location id=$id rc=${errorKey(failure)}")
     }
@@ -322,9 +332,9 @@ class TelegramReporter @Inject constructor(
         return ca.get(Calendar.YEAR) == cb.get(Calendar.YEAR) && ca.get(Calendar.DAY_OF_YEAR) == cb.get(Calendar.DAY_OF_YEAR)
     }
 
-    private fun isTransient(e: Throwable): Boolean = (e as? TelegramSinkException)?.transient ?: true
+    private fun isTransient(e: Throwable): Boolean = (e as? PushFailure)?.transient ?: true
 
-    private fun errorKey(e: Throwable): String = (e as? TelegramSinkException)?.key ?: e.javaClass.simpleName
+    private fun errorKey(e: Throwable): String = (e as? PushFailure)?.key ?: e.javaClass.simpleName
 
     private suspend fun loadOutbox(): List<OutboxEntry> {
         val raw = settings.getTgReportOutbox()
